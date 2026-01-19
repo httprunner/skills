@@ -1,5 +1,5 @@
 ---
-name: hdc
+name: harmony-hdc
 description: HarmonyOS device control and UI automation via HDC. Use when tasks involve connecting to HarmonyOS devices/emulators, running hdc shell commands, inputting taps/text, launching abilities, or general device management.
 ---
 

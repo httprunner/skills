@@ -1,5 +1,5 @@
 ---
-name: adb
+name: android-adb
 description: Android device control and UI automation via ADB. Use when tasks involve connecting to devices/emulators, running adb shell commands, tapping/swiping, key events, text input, app launch, screenshots, or general device management through adb.
 ---
 
