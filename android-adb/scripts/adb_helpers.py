@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from typing import Optional
 
 
@@ -283,6 +284,95 @@ def cmd_force_stop(args: argparse.Namespace) -> int:
     return result.returncode
 
 
+def _parse_ui_node(node, tappable, inputs, texts):
+    """Recursively parse UI XML nodes."""
+    bounds = node.get("bounds")
+    text = node.get("text", "")
+    content_desc = node.get("content-desc", "")
+    resource_id = node.get("resource-id", "")
+    class_name = node.get("class", "")
+    clickable = node.get("clickable") == "true"
+
+    # Text content can be in 'text' or 'content-desc' attributes
+    display_name = text or content_desc or resource_id
+
+    if bounds:
+        # Bounds format: [x1,y1][x2,y2]
+        match = re.search(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', bounds)
+        if match:
+            x1, y1, x2, y2 = map(int, match.groups())
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+            coords = f"({center_x}, {center_y})"
+
+            if class_name == "android.widget.EditText":
+                inputs.append(f"  ⌨️ \"{display_name}\" @ {coords}")
+            elif clickable:
+                tappable.append(f"  👆 \"{display_name}\" @ {coords}")
+            elif display_name and len(display_name) < 50: # Only short text
+                texts.append(f"  👁️ \"{display_name}\" @ {coords}")
+
+    for child in node:
+        _parse_ui_node(child, tappable, inputs, texts)
+
+
+def parse_ui_xml(xml_path: str):
+    """Parse UI XML and print summary."""
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+
+        tappable = []
+        inputs = []
+        texts = []
+
+        _parse_ui_node(root, tappable, inputs, texts)
+
+        if tappable:
+            print("\nTAPPABLE (clickable=true):")
+            print("\n".join(tappable[:20])) # Limit output
+            if len(tappable) > 20: print(f"  ... ({len(tappable)-20} more)")
+
+        if inputs:
+            print("\nINPUT FIELDS (EditText):")
+            print("\n".join(inputs))
+
+        if texts:
+            print("\nTEXT/INFO (readable):")
+            print("\n".join(texts[:20]))
+
+    except Exception as e:
+        print(f"Error parsing XML: {e}", file=sys.stderr)
+
+
+def cmd_dump_ui(args: argparse.Namespace) -> int:
+    """Dump UI hierarchy to XML and optionally parse it."""
+    remote_path = "/sdcard/window_dump.xml"
+    local_path = args.out or "window_dump.xml"
+
+    # 1. Dump on device
+    cmd_dump = _adb_prefix(args.serial) + ["shell", "uiautomator", "dump", remote_path]
+    result = _run(cmd_dump, capture=True)
+    if result.returncode != 0:
+        print(f"Dump failed: {result.stderr}", file=sys.stderr)
+        return result.returncode
+
+    # 2. Pull to local
+    cmd_pull = _adb_prefix(args.serial) + ["pull", remote_path, local_path]
+    result = _run(cmd_pull, capture=True)
+    if result.returncode != 0:
+        print(f"Pull failed: {result.stderr}", file=sys.stderr)
+        return result.returncode
+
+    print(f"UI dumped to {local_path}")
+
+    # 3. Parse if requested
+    if args.parse:
+        parse_ui_xml(local_path)
+
+    return 0
+
+
 def cmd_wm_size(args: argparse.Namespace) -> int:
     cmd = _adb_prefix(args.serial) + ["shell", "wm", "size"]
     result = _run(cmd, capture=False)
@@ -370,6 +460,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_stop = sub.add_parser("force-stop", help="force-stop app by package")
     p_stop.add_argument("package")
     p_stop.set_defaults(func=cmd_force_stop)
+
+    p_dump = sub.add_parser("dump-ui", help="dump UI hierarchy to XML")
+    p_dump.add_argument("--out", help="output path (default: window_dump.xml)")
+    p_dump.add_argument("--parse", action="store_true", help="print text summary of UI elements")
+    p_dump.set_defaults(func=cmd_dump_ui)
 
     p_wm = sub.add_parser("wm-size", help="print screen size")
     p_wm.set_defaults(func=cmd_wm_size)

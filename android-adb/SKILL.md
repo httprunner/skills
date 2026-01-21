@@ -15,6 +15,13 @@ Use this skill to drive Android devices with `adb` for common device management 
 - For text: prefer ADB Keyboard broadcast if installed; otherwise escape text for `adb shell input text`.
 - For screenshots: use `adb exec-out screencap -p > file.png` when possible.
 
+## UI Inspection (Text-Based)
+
+- Dump UI: `python scripts/adb_helpers.py dump-ui --parse`
+  - Creates `window_dump.xml` locally.
+  - `--parse` outputs clickable elements (buttons) and input fields (EditText).
+- Use this to find coordinates for `tap` or text/resource-ids for validation.
+
 ## When running commands
 
 - Always include `-s <device_id>` if more than one device is connected.
@@ -41,5 +48,6 @@ Prefer script subcommands for:
 - tap / swipe / keyevent
 - text input (with safe escaping)
 - screenshots
+- **dump-ui** (UI hierarchy inspection)
 
 If the script is insufficient, fall back to raw `adb` commands from the reference.
