@@ -1,6 +1,6 @@
 # Feishu API Interaction (Reference)
 
-Minimal Feishu API calls needed to fetch tasks from Bitable while staying compatible with the task table schema.
+Minimal Feishu API calls needed to fetch and update tasks from Bitable while staying compatible with the task table schema.
 
 ## 1) Auth (tenant access token)
 
@@ -78,3 +78,50 @@ Key fields:
 Keep only rows with:
 - `TaskID != 0`
 - At least one of `Params`, `ItemID`, `BookID`, `URL`, `UserID`, `UserName`
+
+## 7) Task updates (single record)
+
+- Endpoint:
+  - `PUT /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}`
+- Body:
+  - `fields`: map of column name → value
+- Response:
+  - `{code: 0}` on success
+
+Example payload:
+
+```json
+{
+  "fields": {
+    "Status": "running",
+    "DispatchedDevice": "1fa20bb",
+    "DispatchedAt": 1769502565740
+  }
+}
+```
+
+## 8) Task updates (batch)
+
+- Endpoint:
+  - `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_update`
+- Body:
+  - `records`: list of `{record_id, fields}`
+- Response:
+  - `data.records` list when successful
+
+Example payload:
+
+```json
+{
+  "records": [
+    {
+      "record_id": "recv9uh3a5va06",
+      "fields": {"Status": "success", "ElapsedSeconds": 16}
+    },
+    {
+      "record_id": "recv9uh3SYCfhZ",
+      "fields": {"Status": "failed", "Logs": "s3://bucket/log.txt"}
+    }
+  ]
+}
+```
