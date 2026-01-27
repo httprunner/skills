@@ -1,9 +1,0 @@
-[project]
-name = "videodl-kwai"
-version = "0.1.0"
-description = "Resolve Kuaishou share links to CDN URLs using videodl (videofetch)."
-requires-python = ">=3.9"
-dependencies = [
-  "videofetch",
-  "requests",
-]
