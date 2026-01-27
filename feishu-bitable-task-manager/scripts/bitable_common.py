@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
@@ -242,3 +245,149 @@ def field_int(fields: Dict[str, Any], name: str) -> int:
         return int(float(raw))
     except ValueError:
         return 0
+
+
+def parse_json_input(raw: str) -> List[dict]:
+    raw = raw.strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        return []
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        if "tasks" in data and isinstance(data["tasks"], list):
+            return data["tasks"]
+        return [data]
+    return []
+
+
+def parse_jsonl_input(raw: str) -> List[dict]:
+    items = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        items.append(json.loads(line))
+    return items
+
+
+def detect_input_format(input_path: str, raw: str) -> str:
+    if input_path and input_path != "-":
+        suffix = Path(input_path).suffix.lower()
+        if suffix == ".jsonl":
+            return "jsonl"
+    stripped = raw.lstrip()
+    if stripped.startswith("[") or stripped.startswith("{"):
+        return "json"
+    return "jsonl"
+
+
+def coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
+def parse_datetime(raw: str) -> Optional[datetime]:
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+    ):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def coerce_millis(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        num = int(value)
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.lower() == "now":
+            return int(time.time() * 1000)
+        if raw.isdigit():
+            num = int(raw)
+        else:
+            parsed = parse_datetime(raw)
+            return int(parsed.timestamp() * 1000) if parsed else None
+    else:
+        return None
+
+    if num < 100000000000:
+        return int(num * 1000)
+    return num
+
+
+def coerce_date_payload(value: Any) -> Optional[Any]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        num = int(value)
+        if num < 100000000000:
+            return int(num * 1000)
+        return num
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.lower() == "now":
+            return int(time.time() * 1000)
+        if raw.isdigit():
+            num = int(raw)
+            if num < 100000000000:
+                return int(num * 1000)
+            return num
+        parsed = parse_datetime(raw)
+        if parsed:
+            return int(parsed.timestamp() * 1000)
+        return raw
+    return None
+
+
+def normalize_extra(extra: Any) -> str:
+    if extra is None:
+        return ""
+    if isinstance(extra, str):
+        return extra.strip()
+    try:
+        return json.dumps(extra, ensure_ascii=False)
+    except Exception:
+        return ""

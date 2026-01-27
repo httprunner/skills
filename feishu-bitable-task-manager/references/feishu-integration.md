@@ -125,3 +125,50 @@ Example payload:
   ]
 }
 ```
+
+## 9) Task create (single record)
+
+- Endpoint:
+  - `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records`
+- Body:
+  - `fields`: map of column name → value
+- Response:
+  - `{code: 0}` on success
+
+Example payload:
+
+```json
+{
+  "fields": {
+    "TaskID": 180413,
+    "App": "com.smile.gifmaker",
+    "Scene": "综合页搜索",
+    "Status": "pending",
+    "Date": "2026-01-27"
+  }
+}
+```
+
+## 10) Task create (batch)
+
+- Endpoint:
+  - `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create`
+- Body:
+  - `records`: list of `{fields}`
+- Response:
+  - `data.records` list when successful
+
+Example payload:
+
+```json
+{
+  "records": [
+    {
+      "fields": {"TaskID": 180413, "Status": "pending"}
+    },
+    {
+      "fields": {"TaskID": 180414, "Status": "pending"}
+    }
+  ]
+}
+```

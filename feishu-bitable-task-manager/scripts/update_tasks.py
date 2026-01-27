@@ -7,9 +7,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
-from pathlib import Path
 from urllib.parse import urlencode
 
 import bitable_common as common
@@ -198,143 +196,8 @@ def extract_statuses_from_items(
     return statuses
 
 
-def parse_json_input(raw: str) -> List[dict]:
-    raw = raw.strip()
-    if not raw:
-        return []
-    if raw.startswith("["):
-        data = json.loads(raw)
-        if isinstance(data, list):
-            return data
-        return []
-    data = json.loads(raw)
-    if isinstance(data, dict):
-        if "tasks" in data and isinstance(data["tasks"], list):
-            return data["tasks"]
-        return [data]
-    return []
-
-
-def parse_jsonl_input(raw: str) -> List[dict]:
-    items = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        items.append(json.loads(line))
-    return items
-
-
-def coerce_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        try:
-            return int(float(value))
-        except ValueError:
-            return None
-    return None
-
-
-def coerce_millis(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        num = int(value)
-    elif isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return None
-        if raw.lower() == "now":
-            return int(time.time() * 1000)
-        if raw.isdigit():
-            num = int(raw)
-        else:
-            parsed = parse_datetime(raw)
-            return int(parsed.timestamp() * 1000) if parsed else None
-    else:
-        return None
-
-    if num < 100000000000:  # likely seconds
-        return int(num * 1000)
-    return num
-
-
-def parse_datetime(raw: str) -> Optional[datetime]:
-    raw = raw.strip()
-    if not raw:
-        return None
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
-    try:
-        return datetime.fromisoformat(raw)
-    except ValueError:
-        pass
-    for fmt in (
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S.%f",
-    ):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def coerce_date_payload(value: Any) -> Optional[Any]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        num = int(value)
-        if num < 100000000000:  # likely seconds
-            return int(num * 1000)
-        return num
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return None
-        if raw.lower() == "now":
-            return int(time.time() * 1000)
-        if raw.isdigit():
-            num = int(raw)
-            if num < 100000000000:
-                return int(num * 1000)
-            return num
-        parsed = parse_datetime(raw)
-        if parsed:
-            return int(parsed.timestamp() * 1000)
-        return raw
-    return None
-
-
-def normalize_extra(extra: Any) -> str:
-    if extra is None:
-        return ""
-    if isinstance(extra, str):
-        return extra.strip()
-    try:
-        return json.dumps(extra, ensure_ascii=False)
-    except Exception:
-        return ""
-
-
 def has_cdn_url(extra: Any) -> bool:
-    raw = normalize_extra(extra)
+    raw = common.normalize_extra(extra)
     if not raw:
         return False
     try:
@@ -356,7 +219,7 @@ def build_update_fields(fields_map: Dict[str, str], update: Dict[str, Any]) -> D
 
     date_value = update.get("date")
     if date_value is not None and fields_map.get("Date"):
-        payload = coerce_date_payload(date_value)
+        payload = common.coerce_date_payload(date_value)
         if payload is not None:
             fields[fields_map["Date"]] = payload
 
@@ -364,8 +227,8 @@ def build_update_fields(fields_map: Dict[str, str], update: Dict[str, Any]) -> D
     if device_serial and fields_map.get("DispatchedDevice"):
         fields[fields_map["DispatchedDevice"]] = device_serial
 
-    dispatched_ms = coerce_millis(update.get("dispatched_at"))
-    start_ms = coerce_millis(update.get("start_at"))
+    dispatched_ms = common.coerce_millis(update.get("dispatched_at"))
+    start_ms = common.coerce_millis(update.get("start_at"))
     if dispatched_ms is not None and fields_map.get("DispatchedAt"):
         fields[fields_map["DispatchedAt"]] = dispatched_ms
     if start_ms is None and dispatched_ms is not None:
@@ -373,20 +236,20 @@ def build_update_fields(fields_map: Dict[str, str], update: Dict[str, Any]) -> D
     if start_ms is not None and fields_map.get("StartAt"):
         fields[fields_map["StartAt"]] = start_ms
 
-    completed_ms = coerce_millis(update.get("completed_at"))
-    end_ms = coerce_millis(update.get("end_at"))
+    completed_ms = common.coerce_millis(update.get("completed_at"))
+    end_ms = common.coerce_millis(update.get("end_at"))
     if completed_ms is not None:
         end_ms = completed_ms
     if end_ms is not None and fields_map.get("EndAt"):
         fields[fields_map["EndAt"]] = end_ms
 
-    elapsed = coerce_int(update.get("elapsed_seconds"))
+    elapsed = common.coerce_int(update.get("elapsed_seconds"))
     if elapsed is None and start_ms is not None and end_ms is not None:
         elapsed = max(0, int((end_ms - start_ms) / 1000))
     if elapsed is not None and fields_map.get("ElapsedSeconds"):
         fields[fields_map["ElapsedSeconds"]] = elapsed
 
-    items_collected = coerce_int(update.get("items_collected"))
+    items_collected = common.coerce_int(update.get("items_collected"))
     if items_collected is not None and fields_map.get("ItemsCollected"):
         fields[fields_map["ItemsCollected"]] = items_collected
 
@@ -394,7 +257,7 @@ def build_update_fields(fields_map: Dict[str, str], update: Dict[str, Any]) -> D
     if logs and fields_map.get("Logs"):
         fields[fields_map["Logs"]] = logs
 
-    retry_count = coerce_int(update.get("retry_count"))
+    retry_count = common.coerce_int(update.get("retry_count"))
     if retry_count is not None and fields_map.get("RetryCount"):
         fields[fields_map["RetryCount"]] = retry_count
 
@@ -402,7 +265,7 @@ def build_update_fields(fields_map: Dict[str, str], update: Dict[str, Any]) -> D
     force_extra = bool(update.get("force_extra"))
     if fields_map.get("Extra") and extra is not None:
         if force_extra or (status == "success" and has_cdn_url(extra)):
-            extra_payload = normalize_extra(extra)
+            extra_payload = common.normalize_extra(extra)
             if extra_payload:
                 fields[fields_map["Extra"]] = extra_payload
 
@@ -467,17 +330,6 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def detect_input_format(input_path: str, raw: str) -> str:
-    if input_path and input_path != "-":
-        suffix = Path(input_path).suffix.lower()
-        if suffix == ".jsonl":
-            return "jsonl"
-    stripped = raw.lstrip()
-    if stripped.startswith("[") or stripped.startswith("{"):
-        return "json"
-    return "jsonl"
-
-
 def load_updates(args: argparse.Namespace, fields_map: Dict[str, str]) -> List[dict]:
     updates: List[dict] = []
     if args.input:
@@ -486,8 +338,8 @@ def load_updates(args: argparse.Namespace, fields_map: Dict[str, str]) -> List[d
         else:
             with open(args.input, "r", encoding="utf-8") as handle:
                 raw = handle.read()
-        mode = detect_input_format(args.input, raw)
-        updates = parse_jsonl_input(raw) if mode == "jsonl" else parse_json_input(raw)
+        mode = common.detect_input_format(args.input, raw)
+        updates = common.parse_jsonl_input(raw) if mode == "jsonl" else common.parse_json_input(raw)
     else:
         base = {
             "task_id": args.task_id,
@@ -634,7 +486,7 @@ def main(argv: List[str]) -> int:
     biz_task_ids_to_resolve: List[str] = []
     for upd in updates:
         record_id = str(upd.get("record_id") or "").strip()
-        task_id = coerce_int(upd.get("task_id")) or 0
+        task_id = common.coerce_int(upd.get("task_id")) or 0
         biz_task_id = str(upd.get("biz_task_id") or "").strip()
         if not record_id and task_id > 0:
             task_ids_to_resolve.append(task_id)
@@ -685,7 +537,7 @@ def main(argv: List[str]) -> int:
         for upd in updates:
             record_id = str(upd.get("record_id") or "").strip()
             if not record_id:
-                task_id = coerce_int(upd.get("task_id")) or 0
+                task_id = common.coerce_int(upd.get("task_id")) or 0
                 if task_id > 0:
                     record_id = resolved.get(task_id, "")
                 else:
@@ -714,7 +566,7 @@ def main(argv: List[str]) -> int:
     for upd in updates:
         record_id = str(upd.get("record_id") or "").strip()
         if not record_id:
-            task_id = coerce_int(upd.get("task_id")) or 0
+            task_id = common.coerce_int(upd.get("task_id")) or 0
             if task_id > 0:
                 record_id = resolved.get(task_id, "")
             else:

@@ -1,6 +1,6 @@
 ---
 name: feishu-bitable-task-manager
-description: Manage tasks in Feishu Bitable (multi-dimensional table): fetch, update, and future create flows using a fixed schema, filters, pagination, and status update rules. Use when building or running task pullers/reporters that must match a specific task status table and its field mapping, status presets, and date presets.
+description: Manage tasks in Feishu Bitable (multi-dimensional table): fetch, update, and create flows using a fixed schema, filters, pagination, and status update rules. Use when building or running task pullers/reporters that must match a specific task status table and its field mapping, status presets, and date presets.
 ---
 
 # Feishu Bitable Task Manager
@@ -36,6 +36,10 @@ Follow the task table conventions when pulling and updating tasks in Feishu Bita
 - Apply status + timing + metrics updates using the task table field mapping.
 - For JSONL ingestion, update any fields whose keys match column names, and map `CDNURL` to `Extra`.
 - Use `--skip-status` to skip updates for tasks already in a given status (comma-separated).
+
+7) Create tasks.
+- Use `records/batch_create` for multiple tasks, `records` for single create.
+- Accept JSON/JSONL input (same key conventions as update); map `CDNURL` to `Extra`.
 
 ## Minimal Python example (standalone)
 
@@ -73,10 +77,31 @@ python scripts/update_tasks.py \
   --date 2026-01-27
 ```
 
+```bash
+python scripts/create_tasks.py \
+  --input tasks.jsonl \
+  --status pending \
+  --date 2026-01-27
+```
+
+```bash
+python scripts/create_tasks.py \
+  --biz-task-id GYS2601290001 \
+  --app com.smile.gifmaker \
+  --scene 单个链接采集 \
+  --status pending \
+  --date 2026-01-27 \
+  --book-id 7591421623471705150 \
+  --user-id 5891321132 \
+  --url https://www.kuaishou.com/short-video/3xcx7sk3yi583je
+```
+
 ## Resources
 
 - Read `references/task-fetch.md` for filters, pagination, validation, and field mapping.
 - Read `references/task-update.md` for status updates, timing fields, and batch update rules.
+- Read `references/task-create.md` for create payload rules and batch create behavior.
 - Read `references/feishu-integration.md` for Feishu API endpoints and request/response payloads.
 - `scripts/fetch_tasks.py`: HTTP-based Python implementation that hits `/records/search` and decodes tasks (including wiki URL support).
 - `scripts/update_tasks.py`: HTTP-based Python implementation that updates task rows via `/records/batch_update` or `/records/{record_id}`.
+- `scripts/create_tasks.py`: HTTP-based Python implementation that creates task rows via `/records/batch_create` or `/records`.
