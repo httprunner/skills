@@ -10,7 +10,7 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-import requests
+import tls_client
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -121,9 +121,19 @@ def _extract_photo_id(url: str) -> Optional[str]:
     return None
 
 
-def _resolve_url(session: requests.Session, url: str, timeout: int = 10) -> str:
+def _resolve_url(
+    session: tls_client.Session,
+    url: str,
+    timeout: int = 10,
+    proxy: Optional[str] = None,
+) -> str:
     try:
-        resp = session.get(url, allow_redirects=True, timeout=timeout)
+        resp = session.get(
+            url,
+            allow_redirects=True,
+            timeout_seconds=timeout,
+            proxy=proxy,
+        )
         return resp.url
     except Exception:
         return url
@@ -193,10 +203,11 @@ def _extract_from_init_state(html: str) -> Optional[str]:
 
 
 def _graphql_fetch(
-    session: requests.Session,
+    session: tls_client.Session,
     endpoint: str,
     photo_id: str,
     timeout: int,
+    proxy: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     payload = {
         "operationName": "visionVideoDetail",
@@ -204,7 +215,12 @@ def _graphql_fetch(
         "variables": {"photoId": photo_id},
     }
     try:
-        resp = session.post(endpoint, json=payload, timeout=timeout)
+        resp = session.post(
+            endpoint,
+            json=payload,
+            timeout_seconds=timeout,
+            proxy=proxy,
+        )
         if resp.status_code != 200:
             return None
         return resp.json()
@@ -263,7 +279,10 @@ def extract_cdn_url_detail(
     timeout: int = 10,
     jitter: Tuple[float, float] = (0.0, 0.0),
 ) -> Tuple[Optional[str], str]:
-    session = requests.Session()
+    session = tls_client.Session(
+        client_identifier="chrome_120",
+        random_tls_extension_order=True,
+    )
     session.headers.update({
         "User-Agent": DEFAULT_UA,
         "Referer": "https://www.kuaishou.com/",
@@ -295,17 +314,12 @@ def extract_cdn_url_detail(
                 cookie = cookie_text
     if cookie:
         session.headers["Cookie"] = cookie
-    if proxy:
-        session.proxies.update({
-            "http": proxy,
-            "https": proxy,
-        })
 
     raw_url = extract_first_url(share_url) or share_url
     if jitter and (jitter[0] or jitter[1]):
         time.sleep(random.uniform(jitter[0], jitter[1]))
 
-    resolved = _resolve_url(session, raw_url, timeout=timeout)
+    resolved = _resolve_url(session, raw_url, timeout=timeout, proxy=proxy)
     photo_id = _extract_photo_id(resolved)
     if not photo_id:
         photo_id = _extract_photo_id(raw_url)
@@ -313,7 +327,7 @@ def extract_cdn_url_detail(
         return None, "photoId not found"
 
     for endpoint in (endpoints or DEFAULT_ENDPOINTS):
-        payload = _graphql_fetch(session, endpoint, photo_id, timeout)
+        payload = _graphql_fetch(session, endpoint, photo_id, timeout, proxy=proxy)
         url = _extract_from_graphql_payload(payload or {})
         if url:
             return url, ""
@@ -326,7 +340,8 @@ def extract_cdn_url_detail(
                 "User-Agent": MOBILE_UA,
                 "Referer": "https://m.kuaishou.com/",
             },
-            timeout=timeout,
+            timeout_seconds=timeout,
+            proxy=proxy,
             allow_redirects=True,
         )
         if resp.status_code == 200:
@@ -337,7 +352,7 @@ def extract_cdn_url_detail(
         pass
 
     try:
-        resp = session.get(resolved, timeout=timeout)
+        resp = session.get(resolved, timeout_seconds=timeout, proxy=proxy)
         if resp.status_code == 200:
             url = _extract_from_html(resp.text)
             if url:
