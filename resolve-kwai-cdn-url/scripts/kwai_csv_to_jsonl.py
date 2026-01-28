@@ -41,6 +41,15 @@ def _process_one(
     )
 
 
+def _normalize_cdn_url(cdn_url: str, err: str) -> Tuple[str, str]:
+    if not cdn_url:
+        return "", err
+    lower = cdn_url.strip().lower()
+    if lower.startswith("https://live.kuaishou.com") or lower.startswith("http://live.kuaishou.com"):
+        return "", err or "live.kuaishou.com is not a CDN url"
+    return cdn_url, err
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="CSV -> JSONL with Kuaishou CDN URLs")
     parser.add_argument("csv", help="Input CSV path")
@@ -48,8 +57,8 @@ def main() -> int:
     parser.add_argument("--cdn-col", default="CDNURL", help="Output column name for CDN URL")
     parser.add_argument(
         "--error-col",
-        default="",
-        help="Optional output column for error message (e.g., error_msg). Leave empty to disable.",
+        default="error_msg",
+        help="Output column for error message (default: error_msg). Use empty string to disable.",
     )
     parser.add_argument("--cookie", default=None, help="Raw Cookie header value")
     parser.add_argument(
@@ -140,6 +149,7 @@ def main() -> int:
             return 0
         total_remaining = len(rows)
         completed = skipped
+        success = 0
 
         if args.workers <= 1:
             try:
@@ -154,14 +164,17 @@ def main() -> int:
                         timeout=args.timeout,
                         jitter=jitter_vals,
                     )
+                    cdn_url, err = _normalize_cdn_url(cdn_url, err)
                     row[args.cdn_col] = cdn_url or ""
                     if args.error_col:
                         row[args.error_col] = err
                     _write_jsonl_row(row, output)
                     completed += 1
+                    if cdn_url:
+                        success += 1
                     if args.progress_every and completed % args.progress_every == 0:
                         sys.stderr.write(
-                            f"progress: {completed}/{total}\n"
+                            f"progress: {completed}/{total} success: {success}\n"
                         )
                     if args.sleep:
                         time.sleep(args.sleep)
@@ -192,14 +205,16 @@ def main() -> int:
                 for future in as_completed(future_map):
                     idx = future_map[future]
                     try:
-                        results[idx] = future.result()
+                        results[idx] = _normalize_cdn_url(*future.result())
                     except Exception as exc:
                         results[idx] = ("", str(exc))
                     ready[idx] = results[idx]
                     completed += 1
+                    if results[idx][0]:
+                        success += 1
                     if args.progress_every and completed % args.progress_every == 0:
                         sys.stderr.write(
-                            f"progress: {completed}/{total}\n"
+                            f"progress: {completed}/{total} success: {success}\n"
                         )
 
                     while next_idx in ready:
