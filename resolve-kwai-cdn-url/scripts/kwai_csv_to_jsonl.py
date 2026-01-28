@@ -45,8 +45,14 @@ def _normalize_cdn_url(cdn_url: str, err: str) -> Tuple[str, str]:
     if not cdn_url:
         return "", err
     lower = cdn_url.strip().lower()
-    if lower.startswith("https://live.kuaishou.com") or lower.startswith("http://live.kuaishou.com"):
+    if lower.startswith("https://live.kuaishou.com") or lower.startswith(
+        "http://live.kuaishou.com"):
         return "", err or "live.kuaishou.com is not a CDN url"
+    if lower.startswith("https://captcha.zt.kuaishou.com") or lower.startswith(
+        "http://captcha.zt.kuaishou.com"
+    ):
+        reason = f"captcha url is not a CDN url: {cdn_url}"
+        return "", err or reason
     return cdn_url, err
 
 
