@@ -8,6 +8,20 @@ import os
 import tempfile
 from typing import Dict, Optional, Set, Tuple
 
+def classify_bad_cdn_url(url: str) -> Optional[str]:
+    if not url:
+        return None
+    lower = url.strip().lower()
+    if lower.startswith("https://live.kuaishou.com") or lower.startswith(
+        "http://live.kuaishou.com"
+    ):
+        return "live.kuaishou.com is not a CDN url"
+    if lower.startswith("https://captcha.zt.kuaishou.com") or lower.startswith(
+        "http://captcha.zt.kuaishou.com"
+    ):
+        return f"captcha url is not a CDN url: {url}"
+    return None
+
 
 def is_success_record(
     item: Dict[str, object],

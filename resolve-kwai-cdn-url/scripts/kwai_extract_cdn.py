@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import tls_client
 
-from kwai_common import load_cookie_value
+from kwai_common import classify_bad_cdn_url, load_cookie_value
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -99,7 +99,11 @@ def _rank_url(url: str) -> Tuple[int, int]:
 
 
 def _pick_best_url(urls: Iterable[str]) -> Optional[str]:
-    unique = list(dict.fromkeys(u for u in urls if u.startswith("http")))
+    unique = list(
+        dict.fromkeys(
+            u for u in urls if u.startswith("http") and not classify_bad_cdn_url(u)
+        )
+    )
     if not unique:
         return None
     return sorted(unique, key=_rank_url, reverse=True)[0]
@@ -293,10 +297,14 @@ def extract_cdn_url_detail(
             client_identifier="chrome_120",
             random_tls_extension_order=True,
         )
-    session.headers.update({
-        "User-Agent": DEFAULT_UA,
-        "Referer": "https://www.kuaishou.com/",
-    })
+    session.headers.update(
+        {
+            "User-Agent": DEFAULT_UA,
+            "Referer": "https://www.kuaishou.com/",
+            "Origin": "https://www.kuaishou.com",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+    )
 
     cookie = load_cookie_value(cookie=cookie, cookie_file=cookie_file)
     if cookie:
@@ -317,6 +325,9 @@ def extract_cdn_url_detail(
         payload = _graphql_fetch(session, endpoint, photo_id, timeout, proxy=proxy)
         url = _extract_from_graphql_payload(payload or {})
         if url:
+            bad_reason = classify_bad_cdn_url(url)
+            if bad_reason:
+                return None, bad_reason
             return url, ""
 
     try:
@@ -334,6 +345,9 @@ def extract_cdn_url_detail(
         if resp.status_code == 200:
             url = _extract_from_init_state(resp.text)
             if url:
+                bad_reason = classify_bad_cdn_url(url)
+                if bad_reason:
+                    return None, bad_reason
                 return url, ""
     except Exception:
         pass
@@ -343,6 +357,9 @@ def extract_cdn_url_detail(
         if resp.status_code == 200:
             url = _extract_from_html(resp.text)
             if url:
+                bad_reason = classify_bad_cdn_url(url)
+                if bad_reason:
+                    return None, bad_reason
                 return url, ""
     except Exception:
         pass

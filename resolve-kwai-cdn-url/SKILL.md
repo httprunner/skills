@@ -44,9 +44,10 @@ uv run python scripts/kwai_csv_to_jsonl.py data.csv --url-col URL --cdn-col CDNU
 - videodl auto-extracts the first URL from share text and follows `v.kuaishou.com` redirects.
 - videodl Playwright path honors `proxy/cookie/headers` passed via `requests_overrides` in `kwai_videodl_resolve.py`.
 - GraphQL path tries GraphQL, then mobile `INIT_STATE`, then HTML state parsing.
-- If blocked, pass a real browser cookie via `--cookie` or `--cookie-file`.
+- If blocked, try without cookies first; if still blocked, pass a real browser cookie via `--cookie` or `--cookie-file`.
 - `--cookie` expects a raw Cookie header string, e.g. `kpf=PC_WEB; clientid=3; did=...`.
 - `--cookie-file` accepts either a raw Cookie header string or a JSON cookie array export (list of `{name,value}` objects).
+- When no cookie is provided, videodl will fetch an anonymous cookie from the homepage (incognito-like).
 - `--proxy` applies to all HTTP requests, e.g. `http://user:pass@host:port`.
 - `--resume` rewrites output JSONL to keep only successful rows, then retries missing/failed rows and appends new results.
 - CSV progress logs are batch-based success counts; stats are emitted on completion or Ctrl+C.

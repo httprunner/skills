@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Set, Tuple
 
 from kwai_extract_cdn import extract_cdn_url_detail
-from kwai_common import clean_output_jsonl, load_resume_success_urls
+from kwai_common import classify_bad_cdn_url, clean_output_jsonl, load_resume_success_urls
 
 CLIENT_IDENTIFIERS = (
     "chrome_120",
@@ -63,17 +63,11 @@ def _select_client_identifier(share_url: str) -> str:
 def _normalize_cdn_url(cdn_url: str, err: str) -> Tuple[str, str]:
     if not cdn_url:
         return "", err
-    lower = cdn_url.strip().lower()
-    if lower.startswith("https://live.kuaishou.com") or lower.startswith(
-        "http://live.kuaishou.com"):
-        return "", err or "live.kuaishou.com is not a CDN url"
-    if lower.startswith("https://captcha.zt.kuaishou.com") or lower.startswith(
-        "http://captcha.zt.kuaishou.com"
-    ):
-        reason = f"captcha url is not a CDN url: {cdn_url}"
-        if err and err != reason:
-            return "", f"{err}; {reason}"
-        return "", reason
+    bad_reason = classify_bad_cdn_url(cdn_url)
+    if bad_reason:
+        if err and err != bad_reason:
+            return "", f"{err}; {bad_reason}"
+        return "", bad_reason
     return cdn_url, err
 
 

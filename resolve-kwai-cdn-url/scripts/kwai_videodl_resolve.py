@@ -19,11 +19,16 @@ from urllib.parse import urlparse
 import requests
 from videodl import videodl as videodl_lib
 
-from kwai_common import clean_output_jsonl, load_cookie_value, load_resume_success_urls
+from kwai_common import classify_bad_cdn_url, clean_output_jsonl, load_cookie_value, load_resume_success_urls
 
 UA_MOBILE = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+)
+UA_DESKTOP = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
 )
 
 _INTERRUPTED = False
@@ -69,6 +74,32 @@ def resolve_short_url(url: str, timeout: float, proxy: Optional[str]) -> str:
         return resp.url or url
     except requests.RequestException:
         return url
+
+
+def fetch_anonymous_cookie(
+    timeout: float, proxy: Optional[str]
+) -> Optional[str]:
+    proxies = build_proxies(proxy)
+    session = requests.Session()
+    headers = {
+        "User-Agent": UA_DESKTOP,
+        "Referer": "https://www.kuaishou.com/",
+        "Origin": "https://www.kuaishou.com",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    try:
+        session.get(
+            "https://www.kuaishou.com/",
+            timeout=timeout,
+            headers=headers,
+            proxies=proxies,
+        )
+    except requests.RequestException:
+        return None
+    if not session.cookies:
+        return None
+    pairs = [f"{c.name}={c.value}" for c in session.cookies]
+    return "; ".join(pairs) if pairs else None
 
 
 def detect_unavailable_reason(
@@ -144,6 +175,7 @@ def process_one(
     proxy: Optional[str],
     cookie: Optional[str],
     cookie_file: Optional[str],
+    anonymous_cookie: Optional[str],
 ) -> dict:
     raw = text.strip()
     result = {"url": "", "cdn_url": "", "error_msg": ""}
@@ -161,11 +193,17 @@ def process_one(
     request_overrides = {"timeout": timeout}
     if proxy:
         request_overrides["proxies"] = build_proxies(proxy)
+    headers = dict(request_overrides.get("headers") or {})
+    headers.setdefault("User-Agent", UA_MOBILE)
+    headers.setdefault("Referer", "https://www.kuaishou.com/")
+    headers.setdefault("Origin", "https://www.kuaishou.com")
+    headers.setdefault("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
     cookie_value = load_cookie_value(cookie=cookie, cookie_file=cookie_file)
+    if not cookie_value and anonymous_cookie:
+        cookie_value = anonymous_cookie
     if cookie_value:
-        headers = request_overrides.get("headers") or {}
-        headers = dict(headers)
         headers["Cookie"] = cookie_value
+    if headers:
         request_overrides["headers"] = headers
     try:
         cdn_url = resolve_cdn_url(resolved, request_overrides)
@@ -175,9 +213,14 @@ def process_one(
             )
             result["error_msg"] = reason or "cdn url not found in videodl response"
         else:
-            result["cdn_url"] = cdn_url
+            bad_reason = classify_bad_cdn_url(cdn_url)
+            if bad_reason:
+                result["error_msg"] = bad_reason
+            else:
+                result["cdn_url"] = cdn_url
     except Exception as exc:  # pylint: disable=broad-except
         result["error_msg"] = str(exc)
+
     return result
 
 
@@ -251,6 +294,7 @@ def process_batch(
     progress_every: int,
     completed_offset: int,
     total: int,
+    anonymous_cookie: Optional[str],
 ) -> List[dict]:
     global _INTERRUPTED
     if workers <= 1 or len(batch) == 1:
@@ -265,6 +309,7 @@ def process_batch(
                     proxy=proxy,
                     cookie=cookie,
                     cookie_file=cookie_file,
+                    anonymous_cookie=anonymous_cookie,
                 )
             )
             if progress_every > 0 and idx % progress_every == 0:
@@ -289,6 +334,7 @@ def process_batch(
                 proxy,
                 cookie,
                 cookie_file,
+                anonymous_cookie,
             ): idx
             for idx, item in enumerate(batch)
         }
@@ -388,6 +434,10 @@ def main() -> int:
     if args.resume and not args.input_csv:
         parser.error("--resume is only supported with --input-csv")
 
+    anonymous_cookie = None
+    if not args.cookie and not args.cookie_file:
+        anonymous_cookie = fetch_anonymous_cookie(args.timeout, args.proxy)
+
     if args.input_csv:
         if args.resume and (not args.output or args.output == "-"):
             parser.error("--resume requires --output file")
@@ -449,6 +499,7 @@ def main() -> int:
                 progress_every=args.progress_every,
                 completed_offset=completed,
                 total=total,
+                anonymous_cookie=anonymous_cookie,
             )
             output_rows = build_csv_output_rows(batch_rows, headers, results)
             write_jsonl(output_rows, args.output, append=not first_write)
@@ -481,6 +532,7 @@ def main() -> int:
             progress_every=args.progress_every,
             completed_offset=completed,
             total=total,
+            anonymous_cookie=anonymous_cookie,
         )
         write_jsonl(results, args.output, append=not first_write)
         first_write = False
