@@ -98,3 +98,34 @@ def clean_output_jsonl(
     except FileNotFoundError:
         return (0, 0)
     return (kept, removed)
+
+
+def load_cookie_value(
+    cookie: Optional[str] = None,
+    cookie_file: Optional[str] = None,
+) -> Optional[str]:
+    if cookie_file:
+        try:
+            cookie_text = open(cookie_file, "r", encoding="utf-8").read().strip()
+        except Exception:
+            cookie_text = ""
+        if cookie_text:
+            try:
+                data = json.loads(cookie_text)
+            except Exception:
+                data = None
+            if isinstance(data, dict) and "cookies" in data:
+                data = data["cookies"]
+            if isinstance(data, list):
+                pairs = []
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("name")
+                    value = item.get("value")
+                    if isinstance(name, str) and isinstance(value, str) and name:
+                        pairs.append(f"{name}={value}")
+                return "; ".join(pairs) if pairs else None
+            return cookie_text
+        return None
+    return cookie

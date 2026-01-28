@@ -5,6 +5,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import signal
 import sys
 import time
@@ -307,7 +308,9 @@ def main() -> int:
             sys.stderr.write("Interrupted by user, exiting gracefully.\n")
             if args.workers > 1:
                 signal.signal(signal.SIGINT, signal.SIG_IGN)
-            return 130
+            _emit_stats(processed, success_total, failure_total, skipped, failure_buckets)
+            sys.stderr.flush()
+            os._exit(130)
         finally:
             _emit_stats(processed, success_total, failure_total, skipped, failure_buckets)
 

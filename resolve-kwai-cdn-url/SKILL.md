@@ -6,8 +6,8 @@ description: Resolve Kuaishou (快手 / Kwai) share links or share text into vid
 # Resolve Kwai CDN URL
 
 Extract CDN URLs from Kuaishou share links with two paths:
-- videodl (videofetch): fast, no-cookie.
-- GraphQL/mobile-page: cookie-friendly fallback when videodl fails.
+- videodl (videofetch): primary path, supports cookies/proxy (Playwright + requests).
+- GraphQL/mobile-page: fallback when videodl fails.
 
 ## Fast path (videodl)
 
@@ -18,6 +18,8 @@ uv run python scripts/kwai_videodl_resolve.py "https://v.kuaishou.com/8qIlZu" > 
 uv run python scripts/kwai_videodl_resolve.py --input-csv data.csv --csv-url-field URL --output output.jsonl --workers 10
 uv run python scripts/kwai_videodl_resolve.py --input-csv data.csv --csv-url-field URL --output output.jsonl --workers 10 --resume
 uv run python scripts/kwai_videodl_resolve.py "https://v.kuaishou.com/8qIlZu" --proxy "http://user:pass@host:port"
+uv run python scripts/kwai_videodl_resolve.py "https://v.kuaishou.com/8qIlZu" --cookie "<YOUR_COOKIE>"
+uv run python scripts/kwai_videodl_resolve.py "https://v.kuaishou.com/8qIlZu" --cookie-file cookie.json
 ```
 
 ## Fallback path (GraphQL/mobile-page)
@@ -40,12 +42,15 @@ uv run python scripts/kwai_csv_to_jsonl.py data.csv --url-col URL --cdn-col CDNU
 ## Notes
 
 - videodl auto-extracts the first URL from share text and follows `v.kuaishou.com` redirects.
+- videodl Playwright path honors `proxy/cookie/headers` passed via `requests_overrides` in `kwai_videodl_resolve.py`.
 - GraphQL path tries GraphQL, then mobile `INIT_STATE`, then HTML state parsing.
 - If blocked, pass a real browser cookie via `--cookie` or `--cookie-file`.
 - `--cookie` expects a raw Cookie header string, e.g. `kpf=PC_WEB; clientid=3; did=...`.
 - `--cookie-file` accepts either a raw Cookie header string or a JSON cookie array export (list of `{name,value}` objects).
 - `--proxy` applies to all HTTP requests, e.g. `http://user:pass@host:port`.
 - `--resume` rewrites output JSONL to keep only successful rows, then retries missing/failed rows and appends new results.
+- CSV progress logs are batch-based success counts; stats are emitted on completion or Ctrl+C.
+- `live.kuaishou.com` and `captcha.zt.kuaishou.com` are treated as failures; `error_msg` includes the reason.
 
 ## Resources
 

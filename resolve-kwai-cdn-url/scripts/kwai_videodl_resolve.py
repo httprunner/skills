@@ -18,7 +18,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import requests
 from videodl import videodl as videodl_lib
 
-from kwai_common import clean_output_jsonl, load_resume_success_urls
+from kwai_common import clean_output_jsonl, load_cookie_value, load_resume_success_urls
 
 UA_MOBILE = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
@@ -112,9 +112,10 @@ def pick_download_url(info: dict) -> Optional[str]:
     return None
 
 
-def resolve_cdn_url(url: str) -> str:
+def resolve_cdn_url(url: str, request_overrides: Optional[dict]) -> str:
     video_client = videodl_lib.VideoClient(
-        allowed_video_sources=["KuaishouVideoClient"]
+        allowed_video_sources=["KuaishouVideoClient"],
+        requests_overrides={"KuaishouVideoClient": request_overrides or {}},
     )
     video_infos = video_client.parsefromurl(url)
     if not video_infos:
@@ -126,7 +127,13 @@ def resolve_cdn_url(url: str) -> str:
     return ""
 
 
-def process_one(text: str, timeout: float, proxy: Optional[str]) -> dict:
+def process_one(
+    text: str,
+    timeout: float,
+    proxy: Optional[str],
+    cookie: Optional[str],
+    cookie_file: Optional[str],
+) -> dict:
     raw = text.strip()
     result = {"url": "", "cdn_url": "", "error_msg": ""}
     if not raw:
@@ -140,8 +147,14 @@ def process_one(text: str, timeout: float, proxy: Optional[str]) -> dict:
         return result
 
     resolved = resolve_short_url(url, timeout=timeout, proxy=proxy)
+    request_overrides = {"timeout": timeout}
+    if proxy:
+        request_overrides["proxies"] = {"http": proxy, "https": proxy}
+    cookie_value = load_cookie_value(cookie=cookie, cookie_file=cookie_file)
+    if cookie_value:
+        request_overrides["cookies"] = cookie_value
     try:
-        cdn_url = resolve_cdn_url(resolved)
+        cdn_url = resolve_cdn_url(resolved, request_overrides)
         if not cdn_url:
             reason = detect_unavailable_reason(
                 resolved, timeout=timeout, proxy=proxy
@@ -218,6 +231,8 @@ def process_batch(
     batch: List[str],
     timeout: float,
     proxy: Optional[str],
+    cookie: Optional[str],
+    cookie_file: Optional[str],
     workers: int,
     progress_every: int,
     completed_offset: int,
@@ -229,7 +244,15 @@ def process_batch(
         for idx, item in enumerate(batch, start=1):
             if _INTERRUPTED:
                 break
-            results.append(process_one(item, timeout=timeout, proxy=proxy))
+            results.append(
+                process_one(
+                    item,
+                    timeout=timeout,
+                    proxy=proxy,
+                    cookie=cookie,
+                    cookie_file=cookie_file,
+                )
+            )
             if progress_every > 0 and idx % progress_every == 0:
                 done = completed_offset + idx
                 print(f"progress: {done}/{total}", file=sys.stderr)
@@ -245,7 +268,14 @@ def process_batch(
     executor = ThreadPoolExecutor(max_workers=workers)
     try:
         future_map = {
-            executor.submit(process_one, item, timeout, proxy): idx
+            executor.submit(
+                process_one,
+                item,
+                timeout,
+                proxy,
+                cookie,
+                cookie_file,
+            ): idx
             for idx, item in enumerate(batch)
         }
         for future in as_completed(future_map):
@@ -317,6 +347,12 @@ def main() -> int:
         "--proxy",
         default=None,
         help="Proxy URL, e.g. http://user:pass@host:port",
+    )
+    parser.add_argument("--cookie", default=None, help="Raw Cookie header value")
+    parser.add_argument(
+        "--cookie-file",
+        default=None,
+        help="Path to a cookie.txt file or JSON cookie array",
     )
     parser.add_argument("--workers", type=int, default=5, help="Concurrent workers")
     parser.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout (s)")
@@ -393,6 +429,8 @@ def main() -> int:
                 batch=batch_inputs,
                 timeout=args.timeout,
                 proxy=args.proxy,
+                cookie=args.cookie,
+                cookie_file=args.cookie_file,
                 workers=args.workers,
                 progress_every=args.progress_every,
                 completed_offset=completed,
@@ -423,6 +461,8 @@ def main() -> int:
             batch=batch,
             timeout=args.timeout,
             proxy=args.proxy,
+            cookie=args.cookie,
+            cookie_file=args.cookie_file,
             workers=args.workers,
             progress_every=args.progress_every,
             completed_offset=completed,

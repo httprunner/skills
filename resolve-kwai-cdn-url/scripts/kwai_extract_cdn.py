@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, urlparse
 
 import tls_client
 
+from kwai_common import load_cookie_value
+
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -296,30 +298,7 @@ def extract_cdn_url_detail(
         "Referer": "https://www.kuaishou.com/",
     })
 
-    if cookie_file:
-        try:
-            cookie_text = open(cookie_file, "r", encoding="utf-8").read().strip()
-        except Exception:
-            cookie_text = ""
-        if cookie_text:
-            try:
-                data = json.loads(cookie_text)
-            except Exception:
-                data = None
-            if isinstance(data, dict) and "cookies" in data:
-                data = data["cookies"]
-            if isinstance(data, list):
-                pairs = []
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    name = item.get("name")
-                    value = item.get("value")
-                    if isinstance(name, str) and isinstance(value, str) and name:
-                        pairs.append(f"{name}={value}")
-                cookie = "; ".join(pairs) if pairs else None
-            else:
-                cookie = cookie_text
+    cookie = load_cookie_value(cookie=cookie, cookie_file=cookie_file)
     if cookie:
         session.headers["Cookie"] = cookie
 
