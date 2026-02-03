@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from typing import Optional
 
 
 def _adb_prefix(serial: str | None) -> list[str]:

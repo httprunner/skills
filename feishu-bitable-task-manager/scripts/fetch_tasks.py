@@ -176,7 +176,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--status", default="pending", help="Task status filter (default: pending)")
     parser.add_argument("--date", default="Today", help="Date preset: Today/Yesterday/Any")
     parser.add_argument("--limit", type=int, default=0, help="Max tasks to return (0 = no cap)")
-    parser.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="Page size (max 500)")
+    parser.add_argument("--page-size", type=int, default=common.DEFAULT_PAGE_SIZE, help="Page size (max 500)")
     parser.add_argument("--max-pages", type=int, default=0, help="Max pages to fetch (0 = no cap)")
     parser.add_argument("--ignore-view", action="store_true", default=True, help="Ignore view_id when searching")
     parser.add_argument("--use-view", dest="ignore_view", action="store_false", help="Use view_id from URL")
