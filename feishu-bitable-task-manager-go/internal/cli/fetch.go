@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -116,20 +114,20 @@ func decodeTask(fieldsRaw map[string]any, mapping map[string]string) (Task, bool
 func FetchTasks(opts FetchOptions) int {
 	taskURL := strings.TrimSpace(opts.TaskURL)
 	if taskURL == "" {
-		fmt.Fprintln(os.Stderr, "TASK_BITABLE_URL is required")
+		errLogger.Error("TASK_BITABLE_URL is required")
 		return 2
 	}
 	appID := common.Env("FEISHU_APP_ID", "")
 	appSecret := common.Env("FEISHU_APP_SECRET", "")
 	if appID == "" || appSecret == "" {
-		fmt.Fprintln(os.Stderr, "FEISHU_APP_ID/FEISHU_APP_SECRET are required")
+		errLogger.Error("FEISHU_APP_ID/FEISHU_APP_SECRET are required")
 		return 2
 	}
 	baseURL := common.Env("FEISHU_BASE_URL", common.DefaultBaseURL)
 
 	ref, err := common.ParseBitableURL(taskURL)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("parse bitable URL failed", "err", err)
 		return 2
 	}
 	fields := common.LoadTaskFieldsFromEnv()
@@ -137,17 +135,17 @@ func FetchTasks(opts FetchOptions) int {
 
 	token, err := common.GetTenantAccessToken(baseURL, appID, appSecret)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("get tenant access token failed", "err", err)
 		return 2
 	}
 	if ref.AppToken == "" {
 		if ref.WikiToken == "" {
-			fmt.Fprintln(os.Stderr, "bitable URL missing app_token and wiki_token")
+			errLogger.Error("bitable URL missing app_token and wiki_token")
 			return 2
 		}
 		appToken, err := common.ResolveWikiAppToken(baseURL, token, ref.WikiToken)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errLogger.Error("resolve wiki app token failed", "err", err)
 			return 2
 		}
 		ref.AppToken = appToken
@@ -189,11 +187,11 @@ func FetchTasks(opts FetchOptions) int {
 		}
 		var resp searchResp
 		if err := common.RequestJSON("POST", urlStr, token, body, &resp); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errLogger.Error("search records request failed", "err", err)
 			return 2
 		}
 		if resp.Code != 0 {
-			fmt.Fprintln(os.Stderr, fmt.Errorf("search records failed: code=%d msg=%s", resp.Code, resp.Msg))
+			errLogger.Error("search records failed", "code", resp.Code, "msg", resp.Msg)
 			return 2
 		}
 		items = append(items, resp.Data.Items...)
@@ -228,14 +226,9 @@ func FetchTasks(opts FetchOptions) int {
 		tasks = append(tasks, t)
 	}
 
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
 	if opts.JSONL {
 		for _, t := range tasks {
-			if err := enc.Encode(t); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 2
-			}
+			logger.Info("task", "task", t)
 		}
 		return 0
 	}
@@ -245,10 +238,6 @@ func FetchTasks(opts FetchOptions) int {
 		ElapsedSeconds: float64(int(elapsed*1000)) / 1000,
 		PageInfo:       pageInfo{HasMore: pageToken != "", NextPageToken: pageToken, Pages: pages},
 	}
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(out); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
+	logger.Info("tasks", "data", out)
 	return 0
 }

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"strings"
 )
@@ -21,22 +20,22 @@ func Run(args []string) int {
 	case "create":
 		return runCreate(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		errLogger.Error("unknown command", "command", args[0])
 		printRootUsage()
 		return 2
 	}
 }
 
 func printRootUsage() {
-	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  bitable-task fetch [flags]")
-	fmt.Fprintln(os.Stderr, "  bitable-task update [flags]")
-	fmt.Fprintln(os.Stderr, "  bitable-task create [flags]")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Environment:")
-	fmt.Fprintln(os.Stderr, "  FEISHU_APP_ID, FEISHU_APP_SECRET, TASK_BITABLE_URL (required)")
-	fmt.Fprintln(os.Stderr, "  FEISHU_BASE_URL (optional, default: https://open.feishu.cn)")
-	fmt.Fprintln(os.Stderr, "  TASK_FIELD_* overrides (optional)")
+	logUsage("Usage:")
+	logUsage("  bitable-task fetch [flags]")
+	logUsage("  bitable-task update [flags]")
+	logUsage("  bitable-task create [flags]")
+	logUsage("")
+	logUsage("Environment:")
+	logUsage("  FEISHU_APP_ID, FEISHU_APP_SECRET, TASK_BITABLE_URL (required)")
+	logUsage("  FEISHU_BASE_URL (optional, default: https://open.feishu.cn)")
+	logUsage("  TASK_FIELD_* overrides (optional)")
 }
 
 func runFetch(args []string) int {
@@ -72,7 +71,7 @@ func runFetch(args []string) int {
 	opts.App = strings.TrimSpace(opts.App)
 	opts.Scene = strings.TrimSpace(opts.Scene)
 	if opts.App == "" || opts.Scene == "" {
-		fmt.Fprintln(os.Stderr, "--app and --scene are required")
+		errLogger.Error("--app and --scene are required")
 		return 2
 	}
 	return FetchTasks(opts)

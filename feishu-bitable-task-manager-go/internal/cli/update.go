@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -70,14 +69,14 @@ type getRecordResp struct {
 func UpdateTasks(opts UpdateOptions) int {
 	taskURL := strings.TrimSpace(opts.TaskURL)
 	if taskURL == "" {
-		fmt.Fprintln(os.Stderr, "TASK_BITABLE_URL is required")
+		errLogger.Error("TASK_BITABLE_URL is required")
 		return 2
 	}
 
 	appID := common.Env("FEISHU_APP_ID", "")
 	appSecret := common.Env("FEISHU_APP_SECRET", "")
 	if appID == "" || appSecret == "" {
-		fmt.Fprintln(os.Stderr, "FEISHU_APP_ID/FEISHU_APP_SECRET are required")
+		errLogger.Error("FEISHU_APP_ID/FEISHU_APP_SECRET are required")
 		return 2
 	}
 	baseURL := common.Env("FEISHU_BASE_URL", common.DefaultBaseURL)
@@ -85,32 +84,32 @@ func UpdateTasks(opts UpdateOptions) int {
 
 	updates, err := loadUpdates(opts, fieldsMap)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("load updates failed", "err", err)
 		return 2
 	}
 	if len(updates) == 0 {
-		fmt.Fprintln(os.Stderr, "no updates provided")
+		errLogger.Error("no updates provided")
 		return 2
 	}
 
 	ref, err := common.ParseBitableURL(taskURL)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("parse bitable URL failed", "err", err)
 		return 2
 	}
 	token, err := common.GetTenantAccessToken(baseURL, appID, appSecret)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("get tenant access token failed", "err", err)
 		return 2
 	}
 	if ref.AppToken == "" {
 		if ref.WikiToken == "" {
-			fmt.Fprintln(os.Stderr, "bitable URL missing app_token and wiki_token")
+			errLogger.Error("bitable URL missing app_token and wiki_token")
 			return 2
 		}
 		appTok, err := common.ResolveWikiAppToken(baseURL, token, ref.WikiToken)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errLogger.Error("resolve wiki app token failed", "err", err)
 			return 2
 		}
 		ref.AppToken = appTok
@@ -142,7 +141,7 @@ func UpdateTasks(opts UpdateOptions) int {
 	if len(taskIDsToResolve) > 0 {
 		m, st, err := resolveRecordIDsByTaskID(baseURL, token, ref, fieldsMap, taskIDsToResolve, opts.IgnoreView, viewID)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errLogger.Error("resolve record IDs by task id failed", "err", err)
 			return 2
 		}
 		resolvedTask = m
@@ -153,7 +152,7 @@ func UpdateTasks(opts UpdateOptions) int {
 	if len(bizIDsToResolve) > 0 {
 		m, st, err := resolveRecordIDsByBizTaskID(baseURL, token, ref, fieldsMap, bizIDsToResolve, opts.IgnoreView, viewID)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errLogger.Error("resolve record IDs by biz task id failed", "err", err)
 			return 2
 		}
 		resolvedBiz = m
@@ -176,7 +175,7 @@ func UpdateTasks(opts UpdateOptions) int {
 		if len(recordIDsNeeded) > 0 {
 			fetched, err := fetchRecordStatuses(baseURL, token, ref, recordIDsNeeded, fieldsMap["Status"])
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				errLogger.Error("fetch record statuses failed", "err", err)
 				return 2
 			}
 			for k, v := range fetched {
@@ -773,12 +772,7 @@ func parseCSVSet(s string) map[string]bool {
 }
 
 func printJSON(v any) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-	}
+	logger.Info("result", "data", v)
 }
 
 func firstNonNil(values ...any) any {

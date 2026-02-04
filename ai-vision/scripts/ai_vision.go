@@ -12,7 +12,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
@@ -29,8 +29,8 @@ const (
 )
 
 var (
-	loggerOut = log.New(os.Stdout, "", log.LstdFlags)
-	loggerErr = log.New(os.Stderr, "", log.LstdFlags)
+	logger    = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	errLogger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 )
 
 type modelConfig struct {
@@ -102,23 +102,23 @@ func main() {
 		printUsage()
 		os.Exit(0)
 	default:
-		loggerErr.Printf("Unknown command: %s", os.Args[1])
+		errLogger.Error("Unknown command", "command", os.Args[1])
 		printUsage()
 		os.Exit(2)
 	}
 }
 
 func printUsage() {
-	loggerOut.Println("AI Vision helper")
-	loggerOut.Println("Usage: ai_vision <command> [args]")
-	loggerOut.Println("Commands:")
-	loggerOut.Println("  query --screenshot <file> --prompt <text> [--model <name>]")
-	loggerOut.Println("  assert --screenshot <file> --assertion <text> [--model <name>]")
-	loggerOut.Println("  plan-next --screenshot <file> --instruction <text> [--model <name>]")
-	loggerOut.Println("")
-	loggerOut.Println("Env config (Doubao):")
-	loggerOut.Println("  ARK_BASE_URL, ARK_API_KEY, ARK_MODEL_NAME")
-	loggerOut.Println("For other providers, pass --base-url/--api-key/--model")
+	logger.Info("usage", "line", "AI Vision helper")
+	logger.Info("usage", "line", "Usage: ai_vision <command> [args]")
+	logger.Info("usage", "line", "Commands:")
+	logger.Info("usage", "line", "  query --screenshot <file> --prompt <text> [--model <name>]")
+	logger.Info("usage", "line", "  assert --screenshot <file> --assertion <text> [--model <name>]")
+	logger.Info("usage", "line", "  plan-next --screenshot <file> --instruction <text> [--model <name>]")
+	logger.Info("usage", "line", "")
+	logger.Info("usage", "line", "Env config (Doubao):")
+	logger.Info("usage", "line", "  ARK_BASE_URL, ARK_API_KEY, ARK_MODEL_NAME")
+	logger.Info("usage", "line", "For other providers, pass --base-url/--api-key/--model")
 }
 
 func runQuery(args []string) int {
@@ -132,19 +132,19 @@ func runQuery(args []string) int {
 		return 2
 	}
 	if *screenshot == "" || *prompt == "" {
-		loggerErr.Println("query requires --screenshot and --prompt")
+		errLogger.Error("query requires --screenshot and --prompt")
 		return 2
 	}
 
 	cfg, err := getModelConfig(*model, *baseURL, *apiKey)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("get model config failed", "err", err)
 		return 1
 	}
 
 	imgB64, sz, err := loadImage(*screenshot)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("load image failed", "err", err)
 		return 1
 	}
 
@@ -152,7 +152,7 @@ func runQuery(args []string) int {
 
 	content, err := callModel(cfg, systemPrompt, *prompt, imgB64)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("call model failed", "err", err)
 		return 1
 	}
 
@@ -183,19 +183,19 @@ func runAssert(args []string) int {
 		return 2
 	}
 	if *screenshot == "" || *assertion == "" {
-		loggerErr.Println("assert requires --screenshot and --assertion")
+		errLogger.Error("assert requires --screenshot and --assertion")
 		return 2
 	}
 
 	cfg, err := getModelConfig(*model, *baseURL, *apiKey)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("get model config failed", "err", err)
 		return 1
 	}
 
 	imgB64, sz, err := loadImage(*screenshot)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("load image failed", "err", err)
 		return 1
 	}
 
@@ -203,7 +203,7 @@ func runAssert(args []string) int {
 
 	content, err := callModel(cfg, systemPrompt, *assertion, imgB64)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("call model failed", "err", err)
 		return 1
 	}
 
@@ -235,19 +235,19 @@ func runPlanNext(args []string) int {
 
 	prompt := strings.TrimSpace(*instruction)
 	if *screenshot == "" || prompt == "" {
-		loggerErr.Println("plan-next requires --screenshot and --instruction")
+		errLogger.Error("plan-next requires --screenshot and --instruction")
 		return 2
 	}
 
 	cfg, err := getModelConfig(*model, *baseURL, *apiKey)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("get model config failed", "err", err)
 		return 1
 	}
 
 	imgB64, sz, err := loadImage(*screenshot)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("load image failed", "err", err)
 		return 1
 	}
 
@@ -260,13 +260,13 @@ func runPlanNext(args []string) int {
 
 	content, err := callModel(cfg, systemPrompt, userPrompt, imgB64)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("call model failed", "err", err)
 		return 1
 	}
 
 	result, err := parseJSONPlanning(content, sz)
 	if err != nil {
-		loggerErr.Println(err)
+		errLogger.Error("parse JSON planning failed", "err", err)
 		return 1
 	}
 	return printJSON(result)
@@ -833,12 +833,7 @@ func cleanJSONContent(content string) string {
 }
 
 func printJSON(v interface{}) int {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
-		loggerErr.Println(err)
-		return 1
-	}
+	logger.Info("result", "data", v)
 	return 0
 }
 

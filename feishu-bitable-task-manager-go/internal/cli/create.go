@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -65,14 +64,14 @@ type createReport struct {
 func CreateTasks(opts CreateOptions) int {
 	taskURL := strings.TrimSpace(opts.TaskURL)
 	if taskURL == "" {
-		fmt.Fprintln(os.Stderr, "TASK_BITABLE_URL is required")
+		errLogger.Error("TASK_BITABLE_URL is required")
 		return 2
 	}
 
 	appID := common.Env("FEISHU_APP_ID", "")
 	appSecret := common.Env("FEISHU_APP_SECRET", "")
 	if appID == "" || appSecret == "" {
-		fmt.Fprintln(os.Stderr, "FEISHU_APP_ID/FEISHU_APP_SECRET are required")
+		errLogger.Error("FEISHU_APP_ID/FEISHU_APP_SECRET are required")
 		return 2
 	}
 	baseURL := common.Env("FEISHU_BASE_URL", common.DefaultBaseURL)
@@ -80,32 +79,32 @@ func CreateTasks(opts CreateOptions) int {
 
 	creates, err := loadCreates(opts, fieldsMap)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("load creates failed", "err", err)
 		return 2
 	}
 	if len(creates) == 0 {
-		fmt.Fprintln(os.Stderr, "no tasks provided")
+		errLogger.Error("no tasks provided")
 		return 2
 	}
 
 	ref, err := common.ParseBitableURL(taskURL)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("parse bitable URL failed", "err", err)
 		return 2
 	}
 	token, err := common.GetTenantAccessToken(baseURL, appID, appSecret)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errLogger.Error("get tenant access token failed", "err", err)
 		return 2
 	}
 	if ref.AppToken == "" {
 		if ref.WikiToken == "" {
-			fmt.Fprintln(os.Stderr, "bitable URL missing app_token and wiki_token")
+			errLogger.Error("bitable URL missing app_token and wiki_token")
 			return 2
 		}
 		appTok, err := common.ResolveWikiAppToken(baseURL, token, ref.WikiToken)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errLogger.Error("resolve wiki app token failed", "err", err)
 			return 2
 		}
 		ref.AppToken = appTok
@@ -159,7 +158,7 @@ func CreateTasks(opts CreateOptions) int {
 			mappedField := fieldMap[f]
 			resolved, err := resolveExistingByField(baseURL, token, ref, mappedField, values)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				errLogger.Error("resolve existing records failed", "err", err)
 				return 2
 			}
 			existingByField[f] = resolved
