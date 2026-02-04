@@ -70,7 +70,7 @@ func runCmd(cmd []string, capture bool, timeout time.Duration) cmdResult {
 
 func runAdb(serial string, capture bool, args ...string) cmdResult {
 	cmd := append(adbPrefix(serial), args...)
-	logger.Debug("adb command", "cmd", strings.Join(cmd, " "))
+	logger.Debug("exec adb", "cmd", strings.Join(cmd, " "))
 	return runCmd(cmd, capture, defaultTimeout)
 }
 
@@ -225,34 +225,39 @@ func setIME(serial, ime string) {
 	_ = runAdb(serial, true, "shell", "ime", "set", ime)
 }
 
-func cmdText(serial string, args []string, useAdbKeyboard bool, autoIME bool) int {
+func cmdText(serial string, args []string, useAdbKeyboard bool) int {
 	if len(args) < 1 {
 		logger.Error("text requires <text>")
 		return 2
 	}
-	text := strings.Join(args, " ")
+	// Allow flags to appear after text by stripping known flags from args.
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		switch arg {
+		case "--adb-keyboard":
+			useAdbKeyboard = true
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	if len(filtered) < 1 {
+		logger.Error("text requires <text>")
+		return 2
+	}
+	text := strings.Join(filtered, " ")
 
-	originalIME := ""
-	if autoIME {
-		originalIME = getCurrentIME(serial)
+	var result cmdResult
+	if useAdbKeyboard {
+		originalIME := getCurrentIME(serial)
 		if !strings.Contains(originalIME, "com.android.adbkeyboard/.AdbIME") {
 			setIME(serial, "com.android.adbkeyboard/.AdbIME")
 			time.Sleep(1 * time.Second)
 		}
-		useAdbKeyboard = true
-	}
-
-	var result cmdResult
-	if useAdbKeyboard {
 		encoded := base64.StdEncoding.EncodeToString([]byte(text))
 		result = runAdb(serial, false, "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", encoded)
 	} else {
 		escaped := escapeInputText(text)
 		result = runAdb(serial, false, "shell", "input", "text", escaped)
-	}
-
-	if autoIME && originalIME != "" && !strings.Contains(originalIME, "com.android.adbkeyboard/.AdbIME") {
-		setIME(serial, originalIME)
 	}
 
 	return result.exitCode
@@ -567,7 +572,6 @@ func main() {
 		fs.SetOutput(os.Stderr)
 		setFlagUsage(fs, "adb_helpers text [flags] <text>")
 		useAdbKeyboard := fs.Bool("adb-keyboard", false, "use ADB Keyboard broadcast")
-		autoIME := fs.Bool("auto-ime", false, "auto switch to ADB Keyboard and restore")
 		if err := fs.Parse(cmdArgs); err != nil {
 			if err == flag.ErrHelp {
 				fs.SetOutput(os.Stdout)
@@ -576,7 +580,7 @@ func main() {
 			}
 			os.Exit(2)
 		}
-		os.Exit(cmdText(*serial, fs.Args(), *useAdbKeyboard, *autoIME))
+		os.Exit(cmdText(*serial, fs.Args(), *useAdbKeyboard))
 	case "clear-text":
 		os.Exit(cmdClearText(*serial))
 	case "screenshot":
@@ -668,7 +672,7 @@ func rootFlagSet(out *os.File) (*flag.FlagSet, *string, *bool) {
 		fmt.Fprintln(fs.Output(), "  swipe <x1> <y1> <x2> <y2> [--duration-ms N]")
 		fmt.Fprintln(fs.Output(), "  long-press <x> <y> [--duration-ms N]")
 		fmt.Fprintln(fs.Output(), "  keyevent <keycode>")
-		fmt.Fprintln(fs.Output(), "  text <text> [--adb-keyboard] [--auto-ime]")
+		fmt.Fprintln(fs.Output(), "  text <text> [--adb-keyboard]")
 		fmt.Fprintln(fs.Output(), "  clear-text")
 		fmt.Fprintln(fs.Output(), "  screenshot [--out path]")
 		fmt.Fprintln(fs.Output(), "  launch <package>")
