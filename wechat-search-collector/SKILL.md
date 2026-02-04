@@ -15,6 +15,7 @@ description: 微信视频号搜索与结果遍历的多端自动化流程（Andr
 - 以下命令均在 `android-adb-go` 目录执行。
 - 列出设备并获取 serial：`go run scripts/adb_helpers.go devices`
 - 默认所有设备操作命令都带 `-s SERIAL`。若仅连接一台设备且用户未提供 serial，直接使用该设备的 serial 作为 `SERIAL`，无需额外询问。
+- 必须确认已提供搜索词 `QUERY`；若用户未提供，直接报错终止流程并请求提供 `QUERY`。
 - 必须确认分辨率（用于坐标点击校准）：
   `go run scripts/adb_helpers.go -s SERIAL wm-size`
 - 检查微信是否已安装（Android 示例）：
@@ -60,7 +61,7 @@ description: 微信视频号搜索与结果遍历的多端自动化流程（Andr
 ### 5. 输入关键词并触发搜索
 - 以下命令均在 `android-adb-go` 目录执行。
 - 使用 ADBKeyboard 清空并输入文本：
-  `go run scripts/adb_helpers.go -s SERIAL text --adb-keyboard --clear`
+  `go run scripts/adb_helpers.go -s SERIAL clear-text`
   `go run scripts/adb_helpers.go -s SERIAL text --adb-keyboard "QUERY"`
 - 点击屏幕上的搜索按钮或发送回车键事件触发搜索：
   `go run scripts/adb_helpers.go -s SERIAL keyevent KEYCODE_ENTER`
@@ -68,7 +69,7 @@ description: 微信视频号搜索与结果遍历的多端自动化流程（Andr
 
 ### 6. 结果滚动到底
 - 反复滑动直到页面底部。
-- 为减少截图识别开销，每滑动 5 次检测一次是否出现底部分割线作为触底判定。
+- 为减少截图识别开销，每滑动 5 次检测一次是否出现底部分割线作为触底判定，滑动间隔随机 1~3 秒。
 
 示例滑动循环（手动执行）：
 ```
@@ -85,4 +86,13 @@ go run scripts/adb_helpers.go -s SERIAL swipe 540 1800 540 400 800
 
 ## 备注与排障
 - 点击不准：重新截图，让 ai-vision 提供更精确坐标（不要改用 `dump-ui`）。
-- 微信弹出弹窗/广告：发送返回键关闭后重新进入流程。
+- 异常流程（弹窗遮挡或步骤卡住）：先识别弹窗并关闭，再继续原步骤。
+  必须使用 ai-vision 从截图中定位关闭按钮（如 “×”、“关闭”、“取消”、“暂不”、“以后再说”、“允许/拒绝” 等），禁止 `dump-ui`。
+  处理流程（必要时重复）：
+  在 `android-adb-go` 目录执行，先截图：
+  `SCREENSHOT=~/.eval/screenshots/wechat_$(date +"%Y%m%d_%H%M%S").png`
+  `go run scripts/adb_helpers.go -s SERIAL screenshot -out "$SCREENSHOT"`
+  在 `ai-vision` 目录执行：
+  `go run scripts/ai_vision.go plan-next --screenshot "$SCREENSHOT" --instruction "识别并关闭当前弹窗（优先关闭或取消），若无弹窗则提示继续原流程"`
+  在 `android-adb-go` 目录执行：
+  `go run scripts/adb_helpers.go -s SERIAL tap X Y`

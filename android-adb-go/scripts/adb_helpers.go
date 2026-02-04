@@ -8,7 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +19,8 @@ import (
 )
 
 const defaultTimeout = 10 * time.Second
+
+var logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 func adbPrefix(serial string) []string {
 	if serial != "" {
@@ -68,6 +70,7 @@ func runCmd(cmd []string, capture bool, timeout time.Duration) cmdResult {
 
 func runAdb(serial string, capture bool, args ...string) cmdResult {
 	cmd := append(adbPrefix(serial), args...)
+	logger.Debug("adb command", "cmd", strings.Join(cmd, " "))
 	return runCmd(cmd, capture, defaultTimeout)
 }
 
@@ -78,7 +81,7 @@ func cmdDevices(serial string, _ []string) int {
 
 func cmdConnect(_ string, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "connect requires <address>")
+		logger.Error("connect requires <address>")
 		return 2
 	}
 	result := runCmd([]string{"adb", "connect", args[0]}, false, defaultTimeout)
@@ -119,7 +122,7 @@ func cmdGetIP(serial string, _ []string) int {
 		}
 	}
 
-	fmt.Fprintln(os.Stderr, "IP not found")
+	logger.Error("IP not found")
 	return 1
 }
 
@@ -128,7 +131,7 @@ func cmdEnableTCPIP(serial string, args []string) int {
 	if len(args) >= 1 {
 		parsed, err := strconv.Atoi(args[0])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "invalid port")
+			logger.Error("invalid port", "value", args[0])
 			return 2
 		}
 		port = parsed
@@ -153,7 +156,7 @@ func cmdShell(serial string, args []string) int {
 
 func cmdTap(serial string, args []string) int {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "tap requires <x> <y>")
+		logger.Error("tap requires <x> <y>")
 		return 2
 	}
 	result := runAdb(serial, false, "shell", "input", "tap", args[0], args[1])
@@ -162,7 +165,7 @@ func cmdTap(serial string, args []string) int {
 
 func cmdDoubleTap(serial string, args []string) int {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "double-tap requires <x> <y>")
+		logger.Error("double-tap requires <x> <y>")
 		return 2
 	}
 	cmd := []string{"shell", "input", "tap", args[0], args[1]}
@@ -174,7 +177,7 @@ func cmdDoubleTap(serial string, args []string) int {
 
 func cmdSwipe(serial string, args []string, durationMs int) int {
 	if len(args) < 4 {
-		fmt.Fprintln(os.Stderr, "swipe requires <x1> <y1> <x2> <y2>")
+		logger.Error("swipe requires <x1> <y1> <x2> <y2>")
 		return 2
 	}
 	cmdArgs := []string{"shell", "input", "swipe", args[0], args[1], args[2], args[3]}
@@ -187,7 +190,7 @@ func cmdSwipe(serial string, args []string, durationMs int) int {
 
 func cmdLongPress(serial string, args []string, durationMs int) int {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "long-press requires <x> <y>")
+		logger.Error("long-press requires <x> <y>")
 		return 2
 	}
 	cmdArgs := []string{"shell", "input", "swipe", args[0], args[1], args[0], args[1], strconv.Itoa(durationMs)}
@@ -197,7 +200,7 @@ func cmdLongPress(serial string, args []string, durationMs int) int {
 
 func cmdKeyEvent(serial string, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "keyevent requires <keycode>")
+		logger.Error("keyevent requires <keycode>")
 		return 2
 	}
 	result := runAdb(serial, false, "shell", "input", "keyevent", args[0])
@@ -224,7 +227,7 @@ func setIME(serial, ime string) {
 
 func cmdText(serial string, args []string, useAdbKeyboard bool, autoIME bool) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "text requires <text>")
+		logger.Error("text requires <text>")
 		return 2
 	}
 	text := strings.Join(args, " ")
@@ -271,7 +274,7 @@ func cmdScreenshot(serial string, outPath string) int {
 
 	file, err := os.Create(outPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		logger.Error("create output file failed", "path", outPath, "err", err)
 		return 1
 	}
 	defer file.Close()
@@ -286,12 +289,12 @@ func cmdScreenshot(serial string, outPath string) int {
 
 	err = adbCmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		fmt.Fprintln(os.Stderr, "Command timed out")
+		logger.Error("adb command timed out")
 		return 124
 	}
 	if err != nil {
 		if stderrBuf.Len() > 0 {
-			io.Copy(os.Stderr, &stderrBuf)
+			logger.Error("adb stderr", "stderr", strings.TrimSpace(stderrBuf.String()))
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -304,7 +307,7 @@ func cmdScreenshot(serial string, outPath string) int {
 
 func cmdLaunch(serial string, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "launch requires <package>")
+		logger.Error("launch requires <package>")
 		return 2
 	}
 	result := runAdb(serial, false, "shell", "monkey", "-p", args[0], "-c", "android.intent.category.LAUNCHER", "1")
@@ -332,13 +335,13 @@ func cmdGetCurrentApp(serial string) int {
 		}
 	}
 
-	fmt.Fprintln(os.Stderr, "System Home (or unknown)")
+	logger.Error("system home (or unknown)")
 	return 1
 }
 
 func cmdForceStop(serial string, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "force-stop requires <package>")
+		logger.Error("force-stop requires <package>")
 		return 2
 	}
 	result := runAdb(serial, false, "shell", "am", "force-stop", args[0])
@@ -408,13 +411,13 @@ func parseUINode(node uiNode, tappable, inputs, texts *[]string) {
 func parseUIXML(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading XML: %v\n", err)
+		logger.Error("error reading XML", "err", err)
 		return
 	}
 
 	var hierarchy uiHierarchy
 	if err := xml.Unmarshal(data, &hierarchy); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing XML: %v\n", err)
+		logger.Error("error parsing XML", "err", err)
 		return
 	}
 
@@ -468,13 +471,13 @@ func cmdDumpUI(serial string, outPath string, parse bool) int {
 
 	result := runAdb(serial, true, "shell", "uiautomator", "dump", remotePath)
 	if result.exitCode != 0 {
-		fmt.Fprintf(os.Stderr, "Dump failed: %s\n", strings.TrimSpace(result.stderr))
+		logger.Error("dump failed", "stderr", strings.TrimSpace(result.stderr))
 		return result.exitCode
 	}
 
 	result = runAdb(serial, true, "pull", remotePath, localPath)
 	if result.exitCode != 0 {
-		fmt.Fprintf(os.Stderr, "Pull failed: %s\n", strings.TrimSpace(result.stderr))
+		logger.Error("pull failed", "stderr", strings.TrimSpace(result.stderr))
 		return result.exitCode
 	}
 
@@ -491,7 +494,7 @@ func cmdWmSize(serial string) int {
 }
 
 func main() {
-	global, serial := rootFlagSet(os.Stderr)
+	global, serial, logJSON := rootFlagSet(os.Stderr)
 	if hasHelpArg(os.Args[1:]) {
 		global.SetOutput(os.Stdout)
 	}
@@ -501,6 +504,7 @@ func main() {
 		}
 		os.Exit(2)
 	}
+	setLoggerJSON(*logJSON)
 	args := global.Args()
 	if len(args) == 0 || args[0] == "help" {
 		global.SetOutput(os.Stdout)
@@ -617,7 +621,7 @@ func main() {
 		global.Usage()
 		os.Exit(0)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
+		logger.Error("unknown command", "command", cmd)
 		global.SetOutput(os.Stdout)
 		global.Usage()
 		os.Exit(2)
@@ -642,14 +646,15 @@ func setFlagUsage(fs *flag.FlagSet, usageLine string) {
 	}
 }
 
-func rootFlagSet(out *os.File) (*flag.FlagSet, *string) {
+func rootFlagSet(out *os.File) (*flag.FlagSet, *string, *bool) {
 	fs := flag.NewFlagSet("adb_helpers", flag.ContinueOnError)
 	fs.SetOutput(out)
 	serial := fs.String("s", "", "device serial/id")
 	fs.StringVar(serial, "serial", "", "device serial/id")
+	logJSON := fs.Bool("log-json", false, "Output logs in JSON")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage:")
-		fmt.Fprintln(fs.Output(), "  adb_helpers [flags] <command> [args]")
+		fmt.Fprintln(fs.Output(), "  adb_helpers [--log-json] [flags] <command> [args]")
 		fmt.Fprintln(fs.Output(), "")
 		fmt.Fprintln(fs.Output(), "Commands:")
 		fmt.Fprintln(fs.Output(), "  devices")
@@ -675,5 +680,13 @@ func rootFlagSet(out *os.File) (*flag.FlagSet, *string) {
 		fmt.Fprintln(fs.Output(), "Global Flags:")
 		fs.PrintDefaults()
 	}
-	return fs, serial
+	return fs, serial, logJSON
+}
+
+func setLoggerJSON(enabled bool) {
+	if enabled {
+		logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		return
+	}
+	logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
