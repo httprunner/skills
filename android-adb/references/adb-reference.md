@@ -1,6 +1,6 @@
 # ADB reference
 
-## Device discovery and selection
+## Setup and selection
 
 - List devices: `adb devices -l`
 - Target a device: `adb -s <device_id> <command>`
@@ -8,14 +8,16 @@
   - `adb kill-server`
   - `adb start-server`
 
-## Connect over Wi-Fi
+## Connection (Wi-Fi)
 
 - Enable tcpip (USB required): `adb -s <device_id> tcpip 5555`
-- Get device IP (examples):
+- Get device IP:
   - `adb -s <device_id> shell ip route`
   - `adb -s <device_id> shell ip addr show wlan0`
 - Connect: `adb connect <ip>:5555`
-- Disconnect: `adb disconnect <ip>:5555` or `adb disconnect`
+- Disconnect:
+  - `adb disconnect <ip>:5555`
+  - `adb disconnect`
 
 ## Device info
 
@@ -30,10 +32,10 @@
   - `adb -s <device_id> shell monkey -p <package> -c android.intent.category.LAUNCHER 1`
 - Force-stop app: `adb -s <device_id> shell am force-stop <package>`
 
-## Input actions
+## Input
 
 - Tap: `adb -s <device_id> shell input tap <x> <y>`
-- Long press (swipe with same coords):
+- Long press:
   - `adb -s <device_id> shell input swipe <x> <y> <x> <y> <duration_ms>`
 - Swipe:
   - `adb -s <device_id> shell input swipe <x1> <y1> <x2> <y2> <duration_ms>`
@@ -44,7 +46,7 @@
 
 ## Text input
 
-### Option A: ADB Keyboard (preferred if installed)
+### ADB Keyboard (preferred)
 
 - Set IME: `adb -s <device_id> shell ime set com.android.adbkeyboard/.AdbIME`
 - Send text (base64):
@@ -52,7 +54,7 @@
 - Clear text:
   - `adb -s <device_id> shell am broadcast -a ADB_CLEAR_TEXT`
 
-### Option B: `input text` (escape required)
+### `input text` (escape required)
 
 - Basic: `adb -s <device_id> shell input text '<escaped>'`
 - Escaping hints:
@@ -68,7 +70,7 @@
   - `adb -s <device_id> shell screencap -p /sdcard/screen.png`
   - `adb -s <device_id> pull /sdcard/screen.png .`
 
-## UI tree (optional)
+## UI tree
 
 - Dump UI XML:
   - `adb -s <device_id> shell uiautomator dump /sdcard/ui.xml`

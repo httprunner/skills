@@ -79,6 +79,16 @@ func cmdDevices(serial string, _ []string) int {
 	return result.exitCode
 }
 
+func cmdStartServer() int {
+	result := runCmd([]string{"adb", "start-server"}, false, defaultTimeout)
+	return result.exitCode
+}
+
+func cmdKillServer() int {
+	result := runCmd([]string{"adb", "kill-server"}, false, defaultTimeout)
+	return result.exitCode
+}
+
 func cmdConnect(_ string, args []string) int {
 	if len(args) < 1 {
 		logger.Error("connect requires <address>")
@@ -523,6 +533,10 @@ func main() {
 	switch cmd {
 	case "devices":
 		os.Exit(cmdDevices(*serial, cmdArgs))
+	case "start-server":
+		os.Exit(cmdStartServer())
+	case "kill-server":
+		os.Exit(cmdKillServer())
 	case "connect":
 		os.Exit(cmdConnect(*serial, cmdArgs))
 	case "disconnect":
@@ -662,6 +676,8 @@ func rootFlagSet(out *os.File) (*flag.FlagSet, *string, *bool) {
 		fmt.Fprintln(fs.Output(), "")
 		fmt.Fprintln(fs.Output(), "Commands:")
 		fmt.Fprintln(fs.Output(), "  devices")
+		fmt.Fprintln(fs.Output(), "  start-server")
+		fmt.Fprintln(fs.Output(), "  kill-server")
 		fmt.Fprintln(fs.Output(), "  connect <address>")
 		fmt.Fprintln(fs.Output(), "  disconnect [address]")
 		fmt.Fprintln(fs.Output(), "  get-ip")

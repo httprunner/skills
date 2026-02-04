@@ -26,7 +26,7 @@ If `go` is not available, use the `go-installer` skill first. If that skill is n
 
 ## UI Inspection (Vision-Based via ai-vision)
 
-If `dump-ui` returns empty/partial trees, call the `ai-vision` skill to infer coordinates from a screenshot, then feed those coordinates into `adb` taps. This keeps UI understanding separate from device control.
+If `dump-ui` returns empty/partial trees, call the `ai-vision` skill to infer coordinates from a screenshot, then feed those coordinates into `adb` taps. This keeps UI understanding separate from device control. `ai-vision` returns absolute pixel coordinates ready for `adb_helpers`.
 
 Quick flow:
 1. Capture screenshot.
@@ -45,7 +45,7 @@ go run ../ai-vision/scripts/ai_vision.go query \
   --screenshot "$SCREENSHOT" \
   --prompt "请识别屏幕上与“搜索”相关的文字或放大镜图标，并返回其坐标"
 
-# 3) Tap returned coordinates
+# 3) Tap returned coordinates (absolute pixels)
 go run scripts/adb_helpers.go -s SERIAL tap X Y
 ```
 

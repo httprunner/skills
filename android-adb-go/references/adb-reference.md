@@ -1,75 +1,76 @@
-# ADB reference
+# ADB reference (android-adb-go)
+
+## ADB server
+
+- Start server:
+  - `go run scripts/adb_helpers.go start-server`
+- Kill server:
+  - `go run scripts/adb_helpers.go kill-server`
 
 ## Device discovery and selection
 
-- List devices: `adb devices -l`
-- Target a device: `adb -s <device_id> <command>`
-- Restart server:
-  - `adb kill-server`
-  - `adb start-server`
+- List devices and get serial:
+  - `go run scripts/adb_helpers.go devices`
+- Target a device:
+  - `go run scripts/adb_helpers.go -s SERIAL <command>`
 
-## Connect over Wi-Fi
+## Connection (Wi-Fi)
 
-- Enable tcpip (USB required): `adb -s <device_id> tcpip 5555`
-- Get device IP (examples):
-  - `adb -s <device_id> shell ip route`
-  - `adb -s <device_id> shell ip addr show wlan0`
-- Connect: `adb connect <ip>:5555`
-- Disconnect: `adb disconnect <ip>:5555` or `adb disconnect`
+- Enable tcpip (USB required):
+  - `go run scripts/adb_helpers.go -s SERIAL enable-tcpip [port]`
+- Get device IP:
+  - `go run scripts/adb_helpers.go -s SERIAL get-ip`
+- Connect:
+  - `go run scripts/adb_helpers.go connect <ip>:5555`
+- Disconnect:
+  - `go run scripts/adb_helpers.go disconnect [ip]:5555`
 
 ## Device info
 
-- Current activity/window focus:
-  - `adb -s <device_id> shell dumpsys window | rg -n "mCurrentFocus|mFocusedApp"`
-- Screen size: `adb -s <device_id> shell wm size`
-- Screen density: `adb -s <device_id> shell wm density`
+- Screen size:
+  - `go run scripts/adb_helpers.go -s SERIAL wm-size`
+- Current foreground app:
+  - `go run scripts/adb_helpers.go -s SERIAL get-current-app`
 
 ## App control
 
-- Launch app (monkey):
-  - `adb -s <device_id> shell monkey -p <package> -c android.intent.category.LAUNCHER 1`
-- Force-stop app: `adb -s <device_id> shell am force-stop <package>`
+- Check app installed (replace with your package):
+  - `go run scripts/adb_helpers.go -s SERIAL shell pm list packages | rg -n "<package>"`
+- Launch app:
+  - `go run scripts/adb_helpers.go -s SERIAL launch <package>`
+- Stop app (force-stop):
+  - `go run scripts/adb_helpers.go -s SERIAL force-stop <package>`
 
 ## Input actions
 
-- Tap: `adb -s <device_id> shell input tap <x> <y>`
-- Long press (swipe with same coords):
-  - `adb -s <device_id> shell input swipe <x> <y> <x> <y> <duration_ms>`
+- Tap:
+  - `go run scripts/adb_helpers.go -s SERIAL tap X Y`
+- Double tap:
+  - `go run scripts/adb_helpers.go -s SERIAL double-tap X Y`
+- Long press:
+  - `go run scripts/adb_helpers.go -s SERIAL long-press X Y [--duration-ms N]`
 - Swipe:
-  - `adb -s <device_id> shell input swipe <x1> <y1> <x2> <y2> <duration_ms>`
-- Key events:
-  - Back: `adb -s <device_id> shell input keyevent 4`
-  - Home: `adb -s <device_id> shell input keyevent KEYCODE_HOME`
-  - Enter: `adb -s <device_id> shell input keyevent 66`
+  - `go run scripts/adb_helpers.go -s SERIAL swipe X1 Y1 X2 Y2 [--duration-ms N]`
+- Keyevent (examples):
+  - Back: `go run scripts/adb_helpers.go -s SERIAL keyevent KEYCODE_BACK`
+  - Home: `go run scripts/adb_helpers.go -s SERIAL keyevent KEYCODE_HOME`
+  - Enter: `go run scripts/adb_helpers.go -s SERIAL keyevent KEYCODE_ENTER`
+- Go back multiple times to reach home (adds small random delays):
+  - `for i in {1..5}; do go run scripts/adb_helpers.go -s SERIAL keyevent KEYCODE_BACK; sleep 0.$((RANDOM%6+5)); done`
 
-## Text input
+## Text input (ADBKeyboard)
 
-### Option A: ADB Keyboard (preferred if installed)
-
-- Set IME: `adb -s <device_id> shell ime set com.android.adbkeyboard/.AdbIME`
-- Send text (base64):
-  - `adb -s <device_id> shell am broadcast -a ADB_INPUT_B64 --es msg <base64>`
 - Clear text:
-  - `adb -s <device_id> shell am broadcast -a ADB_CLEAR_TEXT`
-
-### Option B: `input text` (escape required)
-
-- Basic: `adb -s <device_id> shell input text '<escaped>'`
-- Escaping hints:
-  - Space: replace with `%s`
-  - Single quote: escape for shell or use double quotes
-  - Backslash: `\\`
+  - `go run scripts/adb_helpers.go -s SERIAL clear-text`
+- Input text:
+  - `go run scripts/adb_helpers.go -s SERIAL text --adb-keyboard "YOUR_TEXT"`
 
 ## Screenshots
 
-- Fast local capture:
-  - `adb -s <device_id> exec-out screencap -p > screen.png`
-- Two-step fallback:
-  - `adb -s <device_id> shell screencap -p /sdcard/screen.png`
-  - `adb -s <device_id> pull /sdcard/screen.png .`
+- Capture to file:
+  - `go run scripts/adb_helpers.go -s SERIAL screenshot -out "<path>/shot.png"`
 
-## UI tree (optional)
+## UI tree
 
-- Dump UI XML:
-  - `adb -s <device_id> shell uiautomator dump /sdcard/ui.xml`
-  - `adb -s <device_id> pull /sdcard/ui.xml .`
+- Dump UI:
+  - `go run scripts/adb_helpers.go -s SERIAL dump-ui [--out path] [--parse]`
