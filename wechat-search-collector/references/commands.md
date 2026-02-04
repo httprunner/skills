@@ -1,6 +1,7 @@
 # Commands Reference
 
 ## 约定
+- 若未指定设备类型，默认为 Android；若未指定设备序列号，在连接的设备中随机挑选一台
 - 所有设备操作命令默认带 `-s SERIAL`。
 - 所有 `android-adb-go` 命令在 `android-adb-go` 目录执行。
 - 所有 `ai-vision` 命令在 `ai-vision` 目录执行。
