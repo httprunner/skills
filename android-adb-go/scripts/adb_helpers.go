@@ -35,6 +35,22 @@ type cmdResult struct {
 	exitCode int
 }
 
+type launchTargetKind string
+
+const (
+	launchTargetKindPackage  launchTargetKind = "package"
+	launchTargetKindURI      launchTargetKind = "uri"
+	launchTargetKindActivity launchTargetKind = "activity"
+)
+
+type launchTarget struct {
+	kind        launchTargetKind
+	raw         string
+	packageName string
+	activity    string
+	uri         string
+}
+
 func runCmd(cmd []string, capture bool, timeout time.Duration) cmdResult {
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -72,6 +88,56 @@ func runAdb(serial string, capture bool, args ...string) cmdResult {
 	cmd := append(adbPrefix(serial), args...)
 	logger.Debug("exec adb", "cmd", strings.Join(cmd, " "))
 	return runCmd(cmd, capture, defaultTimeout)
+}
+
+func parseLaunchTarget(target string) (launchTarget, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return launchTarget{}, fmt.Errorf("launch target is empty")
+	}
+	if strings.Contains(target, "://") {
+		return launchTarget{
+			kind: launchTargetKindURI,
+			raw:  target,
+			uri:  target,
+		}, nil
+	}
+	if strings.Contains(target, "/") {
+		parts := strings.SplitN(target, "/", 2)
+		pkg := strings.TrimSpace(parts[0])
+		activityPart := strings.TrimSpace(parts[1])
+		if pkg == "" || activityPart == "" {
+			return launchTarget{}, fmt.Errorf("invalid activity target: %q", target)
+		}
+		if strings.HasPrefix(activityPart, ".") {
+			// keep leading dot for am start compatibility
+		} else if !strings.Contains(activityPart, ".") {
+			// treat as relative activity name
+			activityPart = "." + activityPart
+		}
+		return launchTarget{
+			kind:        launchTargetKindActivity,
+			raw:         target,
+			packageName: pkg,
+			activity:    activityPart,
+		}, nil
+	}
+	return launchTarget{
+		kind:        launchTargetKindPackage,
+		raw:         target,
+		packageName: target,
+	}, nil
+}
+
+func detectAmStartError(output string) error {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.Contains(trimmed, "Error:") {
+		return errors.New(strings.TrimSpace(trimmed))
+	}
+	return nil
 }
 
 func cmdDevices(serial string, _ []string) int {
@@ -322,11 +388,52 @@ func cmdScreenshot(serial string, outPath string) int {
 
 func cmdLaunch(serial string, args []string) int {
 	if len(args) < 1 {
-		logger.Error("launch requires <package>")
+		logger.Error("launch requires <target>")
 		return 2
 	}
-	result := runAdb(serial, false, "shell", "monkey", "-p", args[0], "-c", "android.intent.category.LAUNCHER", "1")
-	return result.exitCode
+	target := strings.TrimSpace(strings.Join(args, " "))
+	launchTarget, err := parseLaunchTarget(target)
+	if err != nil {
+		logger.Error("invalid launch target", "err", err)
+		return 2
+	}
+
+	var result cmdResult
+	switch launchTarget.kind {
+	case launchTargetKindURI:
+		result = runAdb(serial, true, "shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", launchTarget.uri)
+		if result.exitCode != 0 {
+			return result.exitCode
+		}
+		if err := detectAmStartError(result.stdout + result.stderr); err != nil {
+			logger.Error("am start uri failed", "err", err)
+			return 1
+		}
+	case launchTargetKindActivity:
+		component := fmt.Sprintf("%s/%s", launchTarget.packageName, launchTarget.activity)
+		result = runAdb(serial, true, "shell", "am", "start", "-W", "-n", component)
+		if result.exitCode != 0 {
+			return result.exitCode
+		}
+		if err := detectAmStartError(result.stdout + result.stderr); err != nil {
+			logger.Error("am start activity failed", "err", err)
+			return 1
+		}
+	case launchTargetKindPackage:
+		result = runAdb(serial, true, "shell", "monkey", "-p", launchTarget.packageName, "-c", "android.intent.category.LAUNCHER", "1")
+		if result.exitCode != 0 {
+			return result.exitCode
+		}
+		if strings.Contains(result.stdout+result.stderr, "monkey aborted") {
+			logger.Error("monkey aborted", "output", strings.TrimSpace(result.stdout+result.stderr))
+			return 1
+		}
+	default:
+		logger.Error("unsupported launch target", "target", target)
+		return 2
+	}
+
+	return 0
 }
 
 func cmdGetCurrentApp(serial string) int {
@@ -691,7 +798,7 @@ func rootFlagSet(out *os.File) (*flag.FlagSet, *string, *bool) {
 		fmt.Fprintln(fs.Output(), "  text <text> [--adb-keyboard]")
 		fmt.Fprintln(fs.Output(), "  clear-text")
 		fmt.Fprintln(fs.Output(), "  screenshot [--out path]")
-		fmt.Fprintln(fs.Output(), "  launch <package>")
+		fmt.Fprintln(fs.Output(), "  launch <package|package/activity|uri>")
 		fmt.Fprintln(fs.Output(), "  get-current-app")
 		fmt.Fprintln(fs.Output(), "  force-stop <package>")
 		fmt.Fprintln(fs.Output(), "  dump-ui [--out path] [--parse]")

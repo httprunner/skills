@@ -37,7 +37,9 @@
 - Check app installed (replace with your package):
   - `go run scripts/adb_helpers.go -s SERIAL shell pm list packages | rg -n "<package>"`
 - Launch app:
-  - `go run scripts/adb_helpers.go -s SERIAL launch <package>`
+  - By package: `go run scripts/adb_helpers.go -s SERIAL launch <package>`
+  - By activity: `go run scripts/adb_helpers.go -s SERIAL launch <package>/<activity>`
+  - By schema/URI: `go run scripts/adb_helpers.go -s SERIAL launch <schema://path>`
 - Stop app (force-stop):
   - `go run scripts/adb_helpers.go -s SERIAL force-stop <package>`
 
