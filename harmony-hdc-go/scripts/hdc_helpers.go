@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -290,39 +289,22 @@ func cmdGetCurrentApp(serial string) int {
 	return 1
 }
 
-func printUsage() {
-	fmt.Println("HDC helper commands (Go)")
-	fmt.Println("Usage: hdc_helpers [-t SERIAL] <command> [args]")
-	fmt.Println("Commands:")
-	fmt.Println("  devices")
-	fmt.Println("  connect <address>")
-	fmt.Println("  disconnect [address]")
-	fmt.Println("  get-ip")
-	fmt.Println("  shell <cmd...>")
-	fmt.Println("  tap <x> <y>")
-	fmt.Println("  double-tap <x> <y>")
-	fmt.Println("  swipe <x1> <y1> <x2> <y2> [--duration-ms N]")
-	fmt.Println("  keyevent <keycode>")
-	fmt.Println("  text <text>")
-	fmt.Println("  screenshot [--out path]")
-	fmt.Println("  launch <bundle>[/Ability]")
-	fmt.Println("  force-stop <bundle>")
-	fmt.Println("  get-current-app")
-}
-
 func main() {
-	global := flag.NewFlagSet("hdc_helpers", flag.ContinueOnError)
-	global.SetOutput(io.Discard)
-	serial := global.String("t", "", "device serial/id")
-	global.StringVar(serial, "s", "", "device serial/id")
+	global, serial := rootFlagSet(os.Stderr)
+	if hasHelpArg(os.Args[1:]) {
+		global.SetOutput(os.Stdout)
+	}
 	if err := global.Parse(os.Args[1:]); err != nil {
-		printUsage()
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
 		os.Exit(2)
 	}
 	args := global.Args()
-	if len(args) == 0 {
-		printUsage()
-		os.Exit(2)
+	if len(args) == 0 || args[0] == "help" {
+		global.SetOutput(os.Stdout)
+		global.Usage()
+		os.Exit(0)
 	}
 
 	cmd := args[0]
@@ -345,8 +327,17 @@ func main() {
 		os.Exit(cmdDoubleTap(*serial, cmdArgs))
 	case "swipe":
 		fs := flag.NewFlagSet("swipe", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "hdc_helpers swipe [flags] <x1> <y1> <x2> <y2>")
 		duration := fs.Int("duration-ms", -1, "swipe duration in ms")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdSwipe(*serial, fs.Args(), *duration))
 	case "keyevent":
 		os.Exit(cmdKeyEvent(*serial, cmdArgs))
@@ -354,8 +345,17 @@ func main() {
 		os.Exit(cmdText(*serial, cmdArgs))
 	case "screenshot":
 		fs := flag.NewFlagSet("screenshot", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "hdc_helpers screenshot [flags]")
 		outPath := fs.String("out", "", "output path")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdScreenshot(*serial, *outPath))
 	case "launch":
 		os.Exit(cmdLaunch(*serial, cmdArgs))
@@ -364,11 +364,62 @@ func main() {
 	case "get-current-app":
 		os.Exit(cmdGetCurrentApp(*serial))
 	case "help", "-h", "--help":
-		printUsage()
+		global.SetOutput(os.Stdout)
+		global.Usage()
 		os.Exit(0)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
-		printUsage()
+		global.SetOutput(os.Stdout)
+		global.Usage()
 		os.Exit(2)
 	}
+}
+
+func hasHelpArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func setFlagUsage(fs *flag.FlagSet, usageLine string) {
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintln(fs.Output(), "  "+usageLine)
+		fmt.Fprintln(fs.Output(), "")
+		fs.PrintDefaults()
+	}
+}
+
+func rootFlagSet(out *os.File) (*flag.FlagSet, *string) {
+	fs := flag.NewFlagSet("hdc_helpers", flag.ContinueOnError)
+	fs.SetOutput(out)
+	serial := fs.String("t", "", "device serial/id")
+	fs.StringVar(serial, "s", "", "device serial/id")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintln(fs.Output(), "  hdc_helpers [flags] <command> [args]")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Commands:")
+		fmt.Fprintln(fs.Output(), "  devices")
+		fmt.Fprintln(fs.Output(), "  connect <address>")
+		fmt.Fprintln(fs.Output(), "  disconnect [address]")
+		fmt.Fprintln(fs.Output(), "  get-ip")
+		fmt.Fprintln(fs.Output(), "  shell <cmd...>")
+		fmt.Fprintln(fs.Output(), "  tap <x> <y>")
+		fmt.Fprintln(fs.Output(), "  double-tap <x> <y>")
+		fmt.Fprintln(fs.Output(), "  swipe <x1> <y1> <x2> <y2> [--duration-ms N]")
+		fmt.Fprintln(fs.Output(), "  keyevent <keycode>")
+		fmt.Fprintln(fs.Output(), "  text <text>")
+		fmt.Fprintln(fs.Output(), "  screenshot [--out path]")
+		fmt.Fprintln(fs.Output(), "  launch <bundle>[/Ability]")
+		fmt.Fprintln(fs.Output(), "  force-stop <bundle>")
+		fmt.Fprintln(fs.Output(), "  get-current-app")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Global Flags:")
+		fs.PrintDefaults()
+	}
+	return fs, serial
 }

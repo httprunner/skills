@@ -490,44 +490,22 @@ func cmdWmSize(serial string) int {
 	return result.exitCode
 }
 
-func printUsage() {
-	fmt.Println("ADB helper commands (Go)")
-	fmt.Println("Usage: adb_helpers [-s SERIAL] <command> [args]")
-	fmt.Println("Commands:")
-	fmt.Println("  devices")
-	fmt.Println("  connect <address>")
-	fmt.Println("  disconnect [address]")
-	fmt.Println("  get-ip")
-	fmt.Println("  enable-tcpip [port]")
-	fmt.Println("  shell <cmd...>")
-	fmt.Println("  tap <x> <y>")
-	fmt.Println("  double-tap <x> <y>")
-	fmt.Println("  swipe <x1> <y1> <x2> <y2> [--duration-ms N]")
-	fmt.Println("  long-press <x> <y> [--duration-ms N]")
-	fmt.Println("  keyevent <keycode>")
-	fmt.Println("  text <text> [--adb-keyboard] [--auto-ime]")
-	fmt.Println("  clear-text")
-	fmt.Println("  screenshot [--out path]")
-	fmt.Println("  launch <package>")
-	fmt.Println("  get-current-app")
-	fmt.Println("  force-stop <package>")
-	fmt.Println("  dump-ui [--out path] [--parse]")
-	fmt.Println("  wm-size")
-}
-
 func main() {
-	global := flag.NewFlagSet("adb_helpers", flag.ContinueOnError)
-	global.SetOutput(io.Discard)
-	serial := global.String("s", "", "device serial/id")
-	global.StringVar(serial, "serial", "", "device serial/id")
+	global, serial := rootFlagSet(os.Stderr)
+	if hasHelpArg(os.Args[1:]) {
+		global.SetOutput(os.Stdout)
+	}
 	if err := global.Parse(os.Args[1:]); err != nil {
-		printUsage()
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
 		os.Exit(2)
 	}
 	args := global.Args()
-	if len(args) == 0 {
-		printUsage()
-		os.Exit(2)
+	if len(args) == 0 || args[0] == "help" {
+		global.SetOutput(os.Stdout)
+		global.Usage()
+		os.Exit(0)
 	}
 
 	cmd := args[0]
@@ -552,28 +530,64 @@ func main() {
 		os.Exit(cmdDoubleTap(*serial, cmdArgs))
 	case "swipe":
 		fs := flag.NewFlagSet("swipe", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "adb_helpers swipe [flags] <x1> <y1> <x2> <y2>")
 		duration := fs.Int("duration-ms", -1, "swipe duration in ms")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdSwipe(*serial, fs.Args(), *duration))
 	case "long-press":
 		fs := flag.NewFlagSet("long-press", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "adb_helpers long-press [flags] <x> <y>")
 		duration := fs.Int("duration-ms", 3000, "press duration in ms")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdLongPress(*serial, fs.Args(), *duration))
 	case "keyevent":
 		os.Exit(cmdKeyEvent(*serial, cmdArgs))
 	case "text":
 		fs := flag.NewFlagSet("text", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "adb_helpers text [flags] <text>")
 		useAdbKeyboard := fs.Bool("adb-keyboard", false, "use ADB Keyboard broadcast")
 		autoIME := fs.Bool("auto-ime", false, "auto switch to ADB Keyboard and restore")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdText(*serial, fs.Args(), *useAdbKeyboard, *autoIME))
 	case "clear-text":
 		os.Exit(cmdClearText(*serial))
 	case "screenshot":
 		fs := flag.NewFlagSet("screenshot", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "adb_helpers screenshot [flags]")
 		outPath := fs.String("out", "", "output path")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdScreenshot(*serial, *outPath))
 	case "launch":
 		os.Exit(cmdLaunch(*serial, cmdArgs))
@@ -583,18 +597,83 @@ func main() {
 		os.Exit(cmdForceStop(*serial, cmdArgs))
 	case "dump-ui":
 		fs := flag.NewFlagSet("dump-ui", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		setFlagUsage(fs, "adb_helpers dump-ui [flags]")
 		outPath := fs.String("out", "", "output path")
 		parse := fs.Bool("parse", false, "parse UI hierarchy")
-		_ = fs.Parse(cmdArgs)
+		if err := fs.Parse(cmdArgs); err != nil {
+			if err == flag.ErrHelp {
+				fs.SetOutput(os.Stdout)
+				fs.Usage()
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
 		os.Exit(cmdDumpUI(*serial, *outPath, *parse))
 	case "wm-size":
 		os.Exit(cmdWmSize(*serial))
 	case "help", "-h", "--help":
-		printUsage()
+		global.SetOutput(os.Stdout)
+		global.Usage()
 		os.Exit(0)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
-		printUsage()
+		global.SetOutput(os.Stdout)
+		global.Usage()
 		os.Exit(2)
 	}
+}
+
+func hasHelpArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func setFlagUsage(fs *flag.FlagSet, usageLine string) {
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintln(fs.Output(), "  "+usageLine)
+		fmt.Fprintln(fs.Output(), "")
+		fs.PrintDefaults()
+	}
+}
+
+func rootFlagSet(out *os.File) (*flag.FlagSet, *string) {
+	fs := flag.NewFlagSet("adb_helpers", flag.ContinueOnError)
+	fs.SetOutput(out)
+	serial := fs.String("s", "", "device serial/id")
+	fs.StringVar(serial, "serial", "", "device serial/id")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintln(fs.Output(), "  adb_helpers [flags] <command> [args]")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Commands:")
+		fmt.Fprintln(fs.Output(), "  devices")
+		fmt.Fprintln(fs.Output(), "  connect <address>")
+		fmt.Fprintln(fs.Output(), "  disconnect [address]")
+		fmt.Fprintln(fs.Output(), "  get-ip")
+		fmt.Fprintln(fs.Output(), "  enable-tcpip [port]")
+		fmt.Fprintln(fs.Output(), "  shell <cmd...>")
+		fmt.Fprintln(fs.Output(), "  tap <x> <y>")
+		fmt.Fprintln(fs.Output(), "  double-tap <x> <y>")
+		fmt.Fprintln(fs.Output(), "  swipe <x1> <y1> <x2> <y2> [--duration-ms N]")
+		fmt.Fprintln(fs.Output(), "  long-press <x> <y> [--duration-ms N]")
+		fmt.Fprintln(fs.Output(), "  keyevent <keycode>")
+		fmt.Fprintln(fs.Output(), "  text <text> [--adb-keyboard] [--auto-ime]")
+		fmt.Fprintln(fs.Output(), "  clear-text")
+		fmt.Fprintln(fs.Output(), "  screenshot [--out path]")
+		fmt.Fprintln(fs.Output(), "  launch <package>")
+		fmt.Fprintln(fs.Output(), "  get-current-app")
+		fmt.Fprintln(fs.Output(), "  force-stop <package>")
+		fmt.Fprintln(fs.Output(), "  dump-ui [--out path] [--parse]")
+		fmt.Fprintln(fs.Output(), "  wm-size")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Global Flags:")
+		fs.PrintDefaults()
+	}
+	return fs, serial
 }

@@ -29,8 +29,8 @@ const (
 )
 
 var (
-	logger    = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	errLogger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger    = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	errLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 )
 
 type modelConfig struct {
@@ -85,50 +85,106 @@ type planResult struct {
 	Content string          `json:"content"`
 }
 
+func setLoggerJSON(enabled bool) {
+	if enabled {
+		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		errLogger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		return
+	}
+	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	errLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+func setFlagUsage(fs *flag.FlagSet, usageLine string) {
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintln(fs.Output(), "  "+usageLine)
+		fmt.Fprintln(fs.Output(), "")
+		fs.PrintDefaults()
+	}
+}
+
+func rootFlagSet(out *os.File) (*flag.FlagSet, *bool) {
+	fs := flag.NewFlagSet("ai_vision", flag.ContinueOnError)
+	fs.SetOutput(out)
+	logJSON := fs.Bool("log-json", false, "Output logs in JSON")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage:")
+		fmt.Fprintln(fs.Output(), "  ai_vision [--log-json] <command> [flags]")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Commands:")
+		fmt.Fprintln(fs.Output(), "  query     --screenshot <file> --prompt <text> [--model <name>]")
+		fmt.Fprintln(fs.Output(), "  assert    --screenshot <file> --assertion <text> [--model <name>]")
+		fmt.Fprintln(fs.Output(), "  plan-next --screenshot <file> --instruction <text> [--model <name>]")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Global Flags:")
+		fs.PrintDefaults()
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "Env config (Doubao):")
+		fmt.Fprintln(fs.Output(), "  ARK_BASE_URL, ARK_API_KEY, ARK_MODEL_NAME")
+		fmt.Fprintln(fs.Output(), "For other providers, pass --base-url/--api-key/--model")
+	}
+	return fs, logJSON
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
+	fs, logJSON := rootFlagSet(os.Stderr)
+	if hasHelpArg(os.Args[1:]) {
+		fs.SetOutput(os.Stdout)
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
 		os.Exit(2)
 	}
-
-	switch os.Args[1] {
-	case "query":
-		os.Exit(runQuery(os.Args[2:]))
-	case "assert":
-		os.Exit(runAssert(os.Args[2:]))
-	case "plan-next":
-		os.Exit(runPlanNext(os.Args[2:]))
-	case "help", "-h", "--help":
-		printUsage()
+	setLoggerJSON(*logJSON)
+	args := fs.Args()
+	if len(args) == 0 || args[0] == "help" {
+		fs.SetOutput(os.Stdout)
+		fs.Usage()
 		os.Exit(0)
+	}
+
+	switch args[0] {
+	case "query":
+		os.Exit(runQuery(args[1:]))
+	case "assert":
+		os.Exit(runAssert(args[1:]))
+	case "plan-next":
+		os.Exit(runPlanNext(args[1:]))
 	default:
-		errLogger.Error("Unknown command", "command", os.Args[1])
-		printUsage()
+		errLogger.Error("Unknown command", "command", args[0])
+		fs.SetOutput(os.Stdout)
+		fs.Usage()
 		os.Exit(2)
 	}
 }
 
-func printUsage() {
-	logger.Info("usage", "line", "AI Vision helper")
-	logger.Info("usage", "line", "Usage: ai_vision <command> [args]")
-	logger.Info("usage", "line", "Commands:")
-	logger.Info("usage", "line", "  query --screenshot <file> --prompt <text> [--model <name>]")
-	logger.Info("usage", "line", "  assert --screenshot <file> --assertion <text> [--model <name>]")
-	logger.Info("usage", "line", "  plan-next --screenshot <file> --instruction <text> [--model <name>]")
-	logger.Info("usage", "line", "")
-	logger.Info("usage", "line", "Env config (Doubao):")
-	logger.Info("usage", "line", "  ARK_BASE_URL, ARK_API_KEY, ARK_MODEL_NAME")
-	logger.Info("usage", "line", "For other providers, pass --base-url/--api-key/--model")
+func hasHelpArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 func runQuery(args []string) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	setFlagUsage(fs, "ai_vision query [flags]")
 	screenshot := fs.String("screenshot", "", "screenshot path (png/jpg)")
 	prompt := fs.String("prompt", "", "query prompt")
 	model := fs.String("model", "", "model name")
 	baseURL := fs.String("base-url", "", "override base url")
 	apiKey := fs.String("api-key", "", "override api key")
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return 0
+		}
 		return 2
 	}
 	if *screenshot == "" || *prompt == "" {
@@ -174,12 +230,19 @@ func runQuery(args []string) int {
 
 func runAssert(args []string) int {
 	fs := flag.NewFlagSet("assert", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	setFlagUsage(fs, "ai_vision assert [flags]")
 	screenshot := fs.String("screenshot", "", "screenshot path (png/jpg)")
 	assertion := fs.String("assertion", "", "assertion text")
 	model := fs.String("model", "", "model name")
 	baseURL := fs.String("base-url", "", "override base url")
 	apiKey := fs.String("api-key", "", "override api key")
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return 0
+		}
 		return 2
 	}
 	if *screenshot == "" || *assertion == "" {
@@ -223,6 +286,8 @@ func runAssert(args []string) int {
 
 func runPlanNext(args []string) int {
 	fs := flag.NewFlagSet("plan-next", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	setFlagUsage(fs, "ai_vision plan-next [flags]")
 	screenshot := fs.String("screenshot", "", "screenshot path (png/jpg)")
 	instruction := fs.String("instruction", "", "instruction text (for action)")
 	history := fs.String("history", "", "optional action history text")
@@ -230,6 +295,11 @@ func runPlanNext(args []string) int {
 	baseURL := fs.String("base-url", "", "override base url")
 	apiKey := fs.String("api-key", "", "override api key")
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return 0
+		}
 		return 2
 	}
 
