@@ -2,14 +2,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import chalk from "chalk";
 
 const defaultTimeoutMs = 15_000;
 
 type LogLevel = "debug" | "info" | "error";
 
-function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream) {
+function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream, color: boolean) {
   const levels: Record<LogLevel, number> = { debug: 10, info: 20, error: 40 };
   const min = levels[level] ?? 20;
+  const useColor = color && !json;
+  const levelColor = (lv: LogLevel, value: string) => {
+    if (!useColor) return value;
+    return lv === "error" ? chalk.red(value) : lv === "debug" ? chalk.cyan(value) : chalk.green(value);
+  };
+  const keyColor = (value: string) => (useColor ? chalk.blue(value) : value);
+  const msgColor = (value: string) => (useColor ? chalk.green(value) : value);
+  const valueColor = (value: string) => (useColor ? chalk.dim(value) : value);
   function shouldLog(lv: LogLevel) {
     return levels[lv] >= min;
   }
@@ -34,8 +43,16 @@ function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream
       stream.write(`${JSON.stringify(payload)}\n`);
       return;
     }
-    const parts = [`time=${time}`, `level=${lv.toUpperCase()}`, `msg=${msg}`];
-    if (fields) for (const [k, v] of Object.entries(fields)) parts.push(`${k}=${formatValue(v)}`);
+    const parts = [
+      `${keyColor("time")}=${valueColor(time)}`,
+      `${keyColor("level")}=${levelColor(lv, lv.toUpperCase())}`,
+      `${keyColor("msg")}=${msgColor(msg)}`,
+    ];
+    if (fields) {
+      for (const [k, v] of Object.entries(fields)) {
+        parts.push(`${keyColor(k)}=${valueColor(formatValue(v))}`);
+      }
+    }
     stream.write(parts.join(" ") + "\n");
   }
   return {
@@ -45,7 +62,7 @@ function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream
   };
 }
 
-let logger = createLogger(false, "info", process.stderr);
+let logger = createLogger(false, "info", process.stderr, Boolean(process.stderr.isTTY));
 
 function hdcPrefix(serial: string) {
   return serial ? ["hdc", "-t", serial] : ["hdc"];
@@ -283,25 +300,18 @@ function parseGlobalFlags(args: string[]) {
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg.startsWith("-") || arg === "-") {
-      rest.push(...args.slice(i));
-      break;
-    }
-    if (arg === "-h" || arg === "--help") {
-      rest.push(arg);
-      continue;
-    }
     if (arg === "-t" || arg === "-s") {
-      i++;
-      if (i < args.length) serial = args[i];
+      if (i + 1 < args.length) {
+        serial = args[i + 1];
+        i++;
+      }
       continue;
     }
     if (arg.startsWith("-t=")) {
       serial = arg.split("=")[1] ?? "";
       continue;
     }
-    rest.push(...args.slice(i));
-    break;
+    rest.push(arg);
   }
   return { serial, rest };
 }

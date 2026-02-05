@@ -2,14 +2,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import chalk from "chalk";
 
 const defaultTimeoutMs = 10_000;
 
 type LogLevel = "debug" | "info" | "error";
 
-function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream) {
+function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream, color: boolean) {
   const levels: Record<LogLevel, number> = { debug: 10, info: 20, error: 40 };
   const min = levels[level] ?? 10;
+  const useColor = color && !json;
+  const levelColor = (lv: LogLevel, value: string) => {
+    if (!useColor) return value;
+    return lv === "error" ? chalk.red(value) : lv === "debug" ? chalk.cyan(value) : chalk.green(value);
+  };
+  const keyColor = (value: string) => (useColor ? chalk.blue(value) : value);
+  const msgColor = (value: string) => (useColor ? chalk.green(value) : value);
+  const valueColor = (value: string) => (useColor ? chalk.dim(value) : value);
   function shouldLog(lv: LogLevel) {
     return levels[lv] >= min;
   }
@@ -34,9 +43,15 @@ function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream
       stream.write(`${JSON.stringify(payload)}\n`);
       return;
     }
-    const parts = [`time=${time}`, `level=${lv.toUpperCase()}`, `msg=${msg}`];
+    const parts = [
+      `${keyColor("time")}=${valueColor(time)}`,
+      `${keyColor("level")}=${levelColor(lv, lv.toUpperCase())}`,
+      `${keyColor("msg")}=${msgColor(msg)}`,
+    ];
     if (fields) {
-      for (const [k, v] of Object.entries(fields)) parts.push(`${k}=${formatValue(v)}`);
+      for (const [k, v] of Object.entries(fields)) {
+        parts.push(`${keyColor(k)}=${valueColor(formatValue(v))}`);
+      }
     }
     stream.write(parts.join(" ") + "\n");
   }
@@ -47,10 +62,11 @@ function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream
   };
 }
 
-let logger = createLogger(false, "debug", process.stderr);
+let logger = createLogger(false, "debug", process.stderr, Boolean(process.stderr.isTTY));
 
 function setLoggerJSON(enabled: boolean) {
-  logger = createLogger(enabled, "debug", process.stderr);
+  const useColor = Boolean(process.stderr.isTTY) && !enabled;
+  logger = createLogger(enabled, "debug", process.stderr, useColor);
 }
 
 function adbPrefix(serial: string) {
@@ -522,29 +538,24 @@ function parseGlobalFlags(args: string[]) {
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg.startsWith("-") || arg === "-") {
-      rest.push(...args.slice(i));
-      break;
-    }
-    if (arg === "-h" || arg === "--help") {
-      rest.push(arg);
-      continue;
-    }
-    if (arg === "--log-json") {
-      logJson = true;
+    if (arg === "--log-json" || arg.startsWith("--log-json=")) {
+      const raw = arg.includes("=") ? arg.split("=", 2)[1] : "true";
+      const lowered = raw.trim().toLowerCase();
+      logJson = !(lowered === "false" || lowered === "0" || lowered === "no");
       continue;
     }
     if (arg === "-s" || arg === "--serial") {
-      i++;
-      if (i < args.length) serial = args[i];
+      if (i + 1 < args.length) {
+        serial = args[i + 1];
+        i++;
+      }
       continue;
     }
     if (arg.startsWith("--serial=")) {
-      serial = arg.split("=")[1] ?? "";
+      serial = arg.split("=", 2)[1] ?? "";
       continue;
     }
-    rest.push(...args.slice(i));
-    break;
+    rest.push(arg);
   }
   return { serial, logJson, rest };
 }

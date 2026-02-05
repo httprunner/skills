@@ -22,6 +22,7 @@ import {
   parseJSONItems,
   parseJSONLItems,
 } from "./bitable_common";
+import chalk from "chalk";
 
 const updateMaxBatchSize = 500;
 const updateMaxFilterValues = 50;
@@ -34,7 +35,15 @@ const appGroupLabels: Record<string, string> = {
 
 type LogLevel = "info" | "error";
 
-function createLogger(json: boolean, stream: NodeJS.WriteStream) {
+function createLogger(json: boolean, stream: NodeJS.WriteStream, color: boolean) {
+  const useColor = color && !json;
+  const levelColor = (value: string, level: LogLevel) => {
+    if (!useColor) return value;
+    return level === "error" ? chalk.red(value) : chalk.green(value);
+  };
+  const keyColor = (value: string) => (useColor ? chalk.blue(value) : value);
+  const msgColor = (value: string) => (useColor ? chalk.green(value) : value);
+  const valueColor = (value: string) => (useColor ? chalk.dim(value) : value);
   function formatValue(value: unknown): string {
     if (typeof value === "string") {
       if (value === "") return '""';
@@ -53,8 +62,16 @@ function createLogger(json: boolean, stream: NodeJS.WriteStream) {
       stream.write(`${JSON.stringify(payload)}\n`);
       return;
     }
-    const parts = [`time=${time}`, `level=${level.toUpperCase()}`, `msg=${msg}`];
-    if (fields) for (const [k, v] of Object.entries(fields)) parts.push(`${k}=${formatValue(v)}`);
+    const parts = [
+      `${keyColor("time")}=${valueColor(time)}`,
+      `${keyColor("level")}=${levelColor(level.toUpperCase(), level)}`,
+      `${keyColor("msg")}=${msgColor(msg)}`,
+    ];
+    if (fields) {
+      for (const [k, v] of Object.entries(fields)) {
+        parts.push(`${keyColor(k)}=${valueColor(formatValue(v))}`);
+      }
+    }
     stream.write(parts.join(" ") + "\n");
   }
   return {
@@ -63,12 +80,14 @@ function createLogger(json: boolean, stream: NodeJS.WriteStream) {
   };
 }
 
-let logger = createLogger(false, process.stdout);
-let errLogger = createLogger(false, process.stderr);
+let logger = createLogger(false, process.stdout, Boolean(process.stdout.isTTY));
+let errLogger = createLogger(false, process.stderr, Boolean(process.stderr.isTTY));
 
 function setLoggerJSON(enabled: boolean) {
-  logger = createLogger(enabled, process.stdout);
-  errLogger = createLogger(enabled, process.stderr);
+  const outColor = Boolean(process.stdout.isTTY) && !enabled;
+  const errColor = Boolean(process.stderr.isTTY) && !enabled;
+  logger = createLogger(enabled, process.stdout, outColor);
+  errLogger = createLogger(enabled, process.stderr, errColor);
 }
 
 function printUsage(out: NodeJS.WriteStream) {
@@ -91,20 +110,17 @@ function parseGlobalFlags(args: string[]) {
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg.startsWith("-") || arg === "-") {
-      rest.push(...args.slice(i));
-      break;
-    }
-    if (arg === "-h" || arg === "--help") {
-      rest.push(arg);
-      continue;
-    }
     if (arg === "--log-json") {
       logJson = true;
       continue;
     }
-    rest.push(...args.slice(i));
-    break;
+    if (arg.startsWith("--log-json=")) {
+      const raw = arg.split("=", 2)[1] ?? "";
+      const lowered = raw.trim().toLowerCase();
+      logJson = !(lowered === "false" || lowered === "0" || lowered === "no");
+      continue;
+    }
+    rest.push(arg);
   }
   return { logJson, rest };
 }
