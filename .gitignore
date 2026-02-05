@@ -7,4 +7,7 @@ __pycache__/
 *.csv
 *.jsonl
 *.json
+!**/package.json
+!**/package-lock.json
 *.png
+node_modules/

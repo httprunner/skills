@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
 
 const envArkBaseURL = "ARK_BASE_URL";
 const envArkAPIKey = "ARK_API_KEY";
@@ -61,105 +62,10 @@ function setLoggerConfig(jsonEnabled: boolean, level: LogLevel) {
   errLogger = createLogger(jsonEnabled, level, process.stderr);
 }
 
-function hasHelpArg(args: string[]) {
-  return args.some((arg) => arg === "-h" || arg === "--help");
-}
-
-function printUsageRoot(out: NodeJS.WriteStream) {
-  out.write("Usage:\n");
-  out.write("  ai_vision [--log-json] <command> [flags]\n\n");
-  out.write("Commands:\n");
-  out.write("  query     --screenshot <file> --prompt <text> [--model <name>]\n");
-  out.write("  assert    --screenshot <file> --assertion <text> [--model <name>]\n");
-  out.write("  plan-next --screenshot <file> --instruction <text> [--model <name>]\n\n");
-  out.write("Global Flags:\n");
-  out.write("  --log-json        Output logs in JSON\n");
-  out.write("  --log-level       Log level: debug or info\n\n");
-  out.write("Env config (Doubao):\n");
-  out.write("  ARK_BASE_URL, ARK_API_KEY, ARK_MODEL_NAME\n");
-  out.write("For other providers, pass --base-url/--api-key/--model\n");
-}
-
-function printCommandUsage(out: NodeJS.WriteStream, usageLine: string) {
-  out.write("Usage:\n");
-  out.write(`  ${usageLine}\n\n`);
-  out.write("Flags:\n");
-  out.write("  --screenshot <file>    screenshot path (png/jpg)\n");
-  out.write("  --model <name>         model name\n");
-  out.write("  --base-url <url>       override base url\n");
-  out.write("  --api-key <key>        override api key\n");
-  if (usageLine.includes("prompt")) {
-    out.write("  --prompt <text>        query prompt\n");
-  }
-  if (usageLine.includes("assertion")) {
-    out.write("  --assertion <text>     assertion text\n");
-  }
-  if (usageLine.includes("instruction")) {
-    out.write("  --instruction <text>   instruction text (for action)\n");
-    out.write("  --history <text>       optional action history text\n");
-  }
-}
-
-type FlagSpec = { type: "string" | "bool"; alias?: string; default?: string | boolean };
-
-function parseFlags(args: string[], spec: Record<string, FlagSpec>) {
-  const flags: Record<string, string | boolean> = {};
-  const aliasMap = new Map<string, string>();
-  for (const [name, cfg] of Object.entries(spec)) {
-    if (cfg.alias) aliasMap.set(cfg.alias, name);
-    if (cfg.default !== undefined) flags[name] = cfg.default;
-  }
-  let help = false;
-  const positionals: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--") {
-      positionals.push(...args.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith("-") || arg === "-") {
-      positionals.push(...args.slice(i));
-      break;
-    }
-    if (arg === "-h" || arg === "--help") {
-      help = true;
-      continue;
-    }
-    if (arg.startsWith("--")) {
-      const raw = arg.slice(2);
-      const eqIdx = raw.indexOf("=");
-      const name = eqIdx === -1 ? raw : raw.slice(0, eqIdx);
-      const opt = spec[name];
-      if (!opt) return { error: `unknown flag --${name}`, flags, positionals, help };
-      if (opt.type === "bool") {
-        flags[name] = eqIdx === -1 ? true : raw.slice(eqIdx + 1) !== "false";
-      } else {
-        let val = eqIdx === -1 ? "" : raw.slice(eqIdx + 1);
-        if (val === "") {
-          i++;
-          if (i >= args.length) return { error: `flag --${name} requires value`, flags, positionals, help };
-          val = args[i];
-        }
-        flags[name] = val;
-      }
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      const key = arg.slice(1);
-      const name = aliasMap.get(key);
-      if (!name) return { error: `unknown flag -${key}`, flags, positionals, help };
-      const opt = spec[name];
-      if (opt.type === "bool") {
-        flags[name] = true;
-      } else {
-        i++;
-        if (i >= args.length) return { error: `flag -${key} requires value`, flags, positionals, help };
-        flags[name] = args[i];
-      }
-      continue;
-    }
-  }
-  return { flags, positionals, help } as const;
+function setLoggerFromProgram(program: Command) {
+  const opts = program.opts<{ logJson?: boolean; logLevel?: string }>();
+  const level = String(opts.logLevel || "info").toLowerCase() === "debug" ? "debug" : "info";
+  setLoggerConfig(Boolean(opts.logJson), level as LogLevel);
 }
 
 function getModelConfig(modelName: string, baseURL: string, apiKey: string) {
@@ -581,31 +487,22 @@ Return in JSON format:
 ## User Instruction
 `;
 
-async function runQuery(args: string[]) {
-  const parsed = parseFlags(args, {
-    screenshot: { type: "string" },
-    prompt: { type: "string" },
-    model: { type: "string" },
-    "base-url": { type: "string" },
-    "api-key": { type: "string" },
-  });
-  if (parsed.error) {
-    errLogger.error(parsed.error);
-    return 2;
-  }
-  if (parsed.help) {
-    printCommandUsage(process.stdout, "ai_vision query [flags]");
-    return 0;
-  }
-  const screenshot = String(parsed.flags.screenshot || "");
-  const prompt = String(parsed.flags.prompt || "");
+async function runQuery(options: {
+  screenshot?: string;
+  prompt?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}) {
+  const screenshot = String(options.screenshot || "");
+  const prompt = String(options.prompt || "");
   if (!screenshot || !prompt) {
     errLogger.error("query requires --screenshot and --prompt");
     return 2;
   }
   let cfg;
   try {
-    cfg = getModelConfig(String(parsed.flags.model || ""), String(parsed.flags["base-url"] || ""), String(parsed.flags["api-key"] || ""));
+    cfg = getModelConfig(String(options.model || ""), String(options.baseUrl || ""), String(options.apiKey || ""));
   } catch (err: any) {
     errLogger.error("get model config failed", { err: err?.message || String(err) });
     return 1;
@@ -638,31 +535,22 @@ async function runQuery(args: string[]) {
   return printJSON({ size: img.size, result, model: cfg.Model, status });
 }
 
-async function runAssert(args: string[]) {
-  const parsed = parseFlags(args, {
-    screenshot: { type: "string" },
-    assertion: { type: "string" },
-    model: { type: "string" },
-    "base-url": { type: "string" },
-    "api-key": { type: "string" },
-  });
-  if (parsed.error) {
-    errLogger.error(parsed.error);
-    return 2;
-  }
-  if (parsed.help) {
-    printCommandUsage(process.stdout, "ai_vision assert [flags]");
-    return 0;
-  }
-  const screenshot = String(parsed.flags.screenshot || "");
-  const assertion = String(parsed.flags.assertion || "");
+async function runAssert(options: {
+  screenshot?: string;
+  assertion?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}) {
+  const screenshot = String(options.screenshot || "");
+  const assertion = String(options.assertion || "");
   if (!screenshot || !assertion) {
     errLogger.error("assert requires --screenshot and --assertion");
     return 2;
   }
   let cfg;
   try {
-    cfg = getModelConfig(String(parsed.flags.model || ""), String(parsed.flags["base-url"] || ""), String(parsed.flags["api-key"] || ""));
+    cfg = getModelConfig(String(options.model || ""), String(options.baseUrl || ""), String(options.apiKey || ""));
   } catch (err: any) {
     errLogger.error("get model config failed", { err: err?.message || String(err) });
     return 1;
@@ -694,33 +582,24 @@ async function runAssert(args: string[]) {
   return printJSON({ size: img.size, result, model: cfg.Model, status });
 }
 
-async function runPlanNext(args: string[]) {
-  const parsed = parseFlags(args, {
-    screenshot: { type: "string" },
-    instruction: { type: "string" },
-    history: { type: "string" },
-    model: { type: "string" },
-    "base-url": { type: "string" },
-    "api-key": { type: "string" },
-  });
-  if (parsed.error) {
-    errLogger.error(parsed.error);
-    return 2;
-  }
-  if (parsed.help) {
-    printCommandUsage(process.stdout, "ai_vision plan-next [flags]");
-    return 0;
-  }
-  const screenshot = String(parsed.flags.screenshot || "");
-  const instruction = String(parsed.flags.instruction || "").trim();
-  const history = String(parsed.flags.history || "").trim();
+async function runPlanNext(options: {
+  screenshot?: string;
+  instruction?: string;
+  history?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}) {
+  const screenshot = String(options.screenshot || "");
+  const instruction = String(options.instruction || "").trim();
+  const history = String(options.history || "").trim();
   if (!screenshot || !instruction) {
     errLogger.error("plan-next requires --screenshot and --instruction");
     return 2;
   }
   let cfg;
   try {
-    cfg = getModelConfig(String(parsed.flags.model || ""), String(parsed.flags["base-url"] || ""), String(parsed.flags["api-key"] || ""));
+    cfg = getModelConfig(String(options.model || ""), String(options.baseUrl || ""), String(options.apiKey || ""));
   } catch (err: any) {
     errLogger.error("get model config failed", { err: err?.message || String(err) });
     return 1;
@@ -756,41 +635,56 @@ async function runPlanNext(args: string[]) {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const hasHelp = hasHelpArg(args);
-  const rootParsed = parseFlags(args, {
-    "log-json": { type: "bool", default: false },
-    "log-level": { type: "string", default: "info" },
-  });
-  if (rootParsed.error) {
-    errLogger.error(rootParsed.error);
-    process.exit(2);
-  }
-  const rest = rootParsed.positionals;
-  const logLevel = String(rootParsed.flags["log-level"] || "info").toLowerCase() === "debug" ? "debug" : "info";
-  setLoggerConfig(Boolean(rootParsed.flags["log-json"]), logLevel as LogLevel);
-  if (rest.length === 0 || rest[0] === "help") {
-    printUsageRoot(process.stdout);
-    process.exit(0);
-  }
-  const cmd = rest[0];
-  const cmdArgs = rest.slice(1);
-  switch (cmd) {
-    case "query":
-      process.exit(await runQuery(cmdArgs));
-    case "assert":
-      process.exit(await runAssert(cmdArgs));
-    case "plan-next":
-      process.exit(await runPlanNext(cmdArgs));
-    default:
-      if (hasHelp) {
-        printUsageRoot(process.stdout);
-        process.exit(0);
-      }
-      errLogger.error("Unknown command", { command: cmd });
-      printUsageRoot(process.stdout);
-      process.exit(2);
-  }
+  const program = new Command();
+  program
+    .name("ai_vision")
+    .description("Multimodal UI understanding and single-step planning")
+    .option("--log-json", "Output logs in JSON")
+    .option("--log-level <level>", "Log level: debug or info", "info")
+    .showHelpAfterError()
+    .showSuggestionAfterError();
+
+  program
+    .command("query")
+    .description("Extract coordinates or attributes from a screenshot")
+    .requiredOption("--screenshot <file>", "screenshot path (png/jpg)")
+    .requiredOption("--prompt <text>", "query prompt")
+    .option("--model <name>", "model name")
+    .option("--base-url <url>", "override base url")
+    .option("--api-key <key>", "override api key")
+    .action(async (options) => {
+      setLoggerFromProgram(program);
+      process.exit(await runQuery(options));
+    });
+
+  program
+    .command("assert")
+    .description("Assert a condition against a screenshot")
+    .requiredOption("--screenshot <file>", "screenshot path (png/jpg)")
+    .requiredOption("--assertion <text>", "assertion text")
+    .option("--model <name>", "model name")
+    .option("--base-url <url>", "override base url")
+    .option("--api-key <key>", "override api key")
+    .action(async (options) => {
+      setLoggerFromProgram(program);
+      process.exit(await runAssert(options));
+    });
+
+  program
+    .command("plan-next")
+    .description("Plan a single next action based on a screenshot")
+    .requiredOption("--screenshot <file>", "screenshot path (png/jpg)")
+    .requiredOption("--instruction <text>", "instruction text (for action)")
+    .option("--history <text>", "optional action history text")
+    .option("--model <name>", "model name")
+    .option("--base-url <url>", "override base url")
+    .option("--api-key <key>", "override api key")
+    .action(async (options) => {
+      setLoggerFromProgram(program);
+      process.exit(await runPlanNext(options));
+    });
+
+  await program.parseAsync(process.argv);
 }
 
 main().catch((err) => {
