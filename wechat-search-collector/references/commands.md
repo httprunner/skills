@@ -33,7 +33,7 @@
   `SCREENSHOT=~/.eval/debug/$(date +"%Y%m%d_%H%M%S").png`
   `npx tsx scripts/adb_helpers.ts -s SERIAL screenshot -out "$SCREENSHOT"`
 - 通过 ai-vision 获取下一步点击坐标：
-  `npx tsx scripts/ai_vision.ts plan-next --screenshot "$SCREENSHOT" --instruction "<你的操作指令>"`
+  `npx tsx scripts/ai_vision.ts plan-next --screenshot "$SCREENSHOT" --prompt "<你的操作指令>"`
 - 点击坐标（ai-vision 输出为 0-1000 相对坐标，adb_helpers 会自动转换为绝对坐标）：
   `npx tsx scripts/adb_helpers.ts -s SERIAL tap X Y`
 
@@ -54,7 +54,7 @@
 - 滑动一屏：
   `npx tsx scripts/adb_helpers.ts -s SERIAL swipe 540 1800 540 400 800`
 - 每滑动 5 次后用 ai-vision 判断是否触底：
-  `npx tsx scripts/ai_vision.ts plan-next --screenshot "$SCREENSHOT" --instruction "判断是否已到结果底部（是否出现底部分割线），若未到底请继续滑动"`
+  `npx tsx scripts/ai_vision.ts plan-next --screenshot "$SCREENSHOT" --prompt "判断是否已到结果底部（是否出现底部分割线），若未到底请继续滑动"`
 
 ## Feishu 任务拉取
 
@@ -81,6 +81,6 @@
 
 ## 弹窗处理
 - 截图后让 ai-vision 识别关闭按钮（优先关闭或取消）：
-  `npx tsx scripts/ai_vision.ts plan-next --screenshot "$SCREENSHOT" --instruction "识别并关闭当前弹窗（优先关闭或取消），若无弹窗则提示继续原流程"`
+  `npx tsx scripts/ai_vision.ts plan-next --screenshot "$SCREENSHOT" --prompt "识别并关闭当前弹窗（优先关闭或取消），若无弹窗则提示继续原流程"`
 - 关闭弹窗：
   `npx tsx scripts/adb_helpers.ts -s SERIAL tap X Y`
