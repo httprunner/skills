@@ -163,6 +163,18 @@ npx tsx scripts/bitable_derive.ts sync \
   --skip-existing
 ```
 
+Create one task per source row and store `Params` as a JSON list `[短剧名, 主角名, 付费剧名]`:
+
+```bash
+npx tsx scripts/bitable_derive.ts sync \
+  --bitable-url "https://.../base/SOURCE_APP?table=SOURCE_TABLE" \
+  --task-url "https://.../base/TASK_APP?table=TASK_TABLE" \
+  --app com.smile.gifmaker \
+  --extra 春节档专项 \
+  --params-list \
+  --skip-existing
+```
+
 Fetch source table to JSONL (fields are simplified to raw values, not typed objects):
 
 ```bash

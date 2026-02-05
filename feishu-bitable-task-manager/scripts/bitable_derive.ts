@@ -136,6 +136,33 @@ function normalizeActor(actor: string) {
   return replaced.replace(/\s+/g, " ").trim();
 }
 
+function normalizeTitleForCompare(value: string) {
+  if (!value) return "";
+  return value.replace(/[\p{P}\p{S}\s]+/gu, "").trim();
+}
+
+function buildParamsListPayload(src: SourceItem) {
+  const values: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string, compareKey?: string) => {
+    const v = value.trim();
+    if (!v) return;
+    const key = (compareKey || v).trim();
+    if (seen.has(key)) return;
+    seen.add(key);
+    values.push(v);
+  };
+  const title = src.title.trim();
+  const titleKey = normalizeTitleForCompare(title);
+  if (title) push(title, titleKey || title);
+  const actor = normalizeActor(src.actor);
+  if (actor) push(actor, actor);
+  const paidTitle = src.paidTitle.trim();
+  const paidKey = normalizeTitleForCompare(paidTitle);
+  if (paidTitle && paidKey && paidKey !== titleKey) push(paidTitle, paidKey);
+  return JSON.stringify(values);
+}
+
 async function resolveBitableRef(baseURL: string, token: string, ref: BitableRef) {
   if (ref.AppToken) return ref;
   if (!ref.WikiToken) throw new Error("bitable URL missing app_token and wiki_token");
@@ -342,10 +369,23 @@ async function batchCreate(baseURL: string, token: string, ref: BitableRef, reco
 function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap: SourceFieldMap, opts: any) {
   const derived: Array<{ app: string; scene: string; date: string; status: string; extra: string; book_id: string; params: string }> = [];
   let filtered = 0;
+  const useParamsList = Boolean(opts.paramsList);
   for (const fieldsRaw of items) {
     const src = extractSourceItem(fieldsRaw, sourceFieldMap);
     if (!validSourceItem(src)) continue;
     filtered++;
+    if (useParamsList) {
+      derived.push({
+        app: opts.app,
+        scene: opts.scene,
+        date: opts.date,
+        status: opts.status,
+        extra: opts.extra,
+        book_id: src.bid,
+        params: buildParamsListPayload(src),
+      });
+      continue;
+    }
     derived.push({
       app: opts.app,
       scene: opts.scene,
@@ -367,7 +407,7 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
         params: actor,
       });
     }
-    if (src.paidTitle && src.paidTitle !== src.title) {
+    if (src.paidTitle && normalizeTitleForCompare(src.paidTitle) !== normalizeTitleForCompare(src.title)) {
       derived.push({
         app: opts.app,
         scene: opts.scene,
@@ -481,6 +521,7 @@ async function main() {
       .option("--task-url <url>", "Task Bitable URL (default: TASK_BITABLE_URL)")
       .option("--app <app>", "Task app", "com.smile.gifmaker")
       .option("--extra <extra>", "Task extra", "春节档专项")
+      .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
       .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
   ).action(async (opts) => {
     setLoggerJSON(Boolean(program.opts()?.logJson));
@@ -575,6 +616,7 @@ async function main() {
       .option("--task-url <url>", "Task Bitable URL (default: TASK_BITABLE_URL)")
       .option("--app <app>", "Task app", "com.smile.gifmaker")
       .option("--extra <extra>", "Task extra", "春节档专项")
+      .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
       .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
   ).action(async (opts) => {
     setLoggerJSON(Boolean(program.opts()?.logJson));
