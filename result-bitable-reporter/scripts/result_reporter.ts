@@ -50,6 +50,7 @@ type FilterOptions = {
   table: string;
   limit: number;
   status: number[];
+  taskID?: number;
   app?: string;
   scene?: string;
   paramsLike?: string;
@@ -166,6 +167,18 @@ function parseStatusCSV(raw: string): number[] {
   return values;
 }
 
+function parseTaskIDNumber(raw: string): number {
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`invalid --task-id value: ${raw}; expected digits only`);
+  }
+  const taskID = Number(value);
+  if (!Number.isSafeInteger(taskID) || taskID < 0) {
+    throw new Error(`invalid --task-id value: ${raw}; out of safe integer range`);
+  }
+  return taskID;
+}
+
 function expandHome(path: string): string {
   if (path === "~") {
     return homedir();
@@ -256,6 +269,9 @@ function buildWhereClause(opts: FilterOptions): string {
   if (opts.status.length > 0) {
     const vals = opts.status.map((s) => String(s)).join(",");
     clauses.push(`reported IN (${vals})`);
+  }
+  if (opts.taskID !== undefined) {
+    clauses.push(`TaskID = ${opts.taskID}`);
   }
   if (opts.app) {
     clauses.push(`App = ${sqlLiteral(opts.app)}`);
@@ -348,8 +364,8 @@ function validateTaskID(taskID: string): string {
   if (trimmed === "") {
     throw new Error("--task-id is required");
   }
-  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
-    throw new Error(`invalid --task-id: ${taskID}; only [A-Za-z0-9._-] are allowed`);
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid --task-id: ${taskID}; expected digits only`);
   }
   return trimmed;
 }
@@ -858,6 +874,7 @@ function buildFilterOptions(cmd: {
   table?: string;
   limit?: string;
   status?: string;
+  taskId?: string;
   app?: string;
   scene?: string;
   paramsLike?: string;
@@ -872,11 +889,13 @@ function buildFilterOptions(cmd: {
     throw new Error(`invalid --limit: ${cmd.limit}`);
   }
   const status = parseStatusCSV(cmd.status ?? "0,-1");
+  const taskID = cmd.taskId?.trim() ? parseTaskIDNumber(cmd.taskId) : undefined;
   return {
     dbPath: resolveDBPath(cmd.dbPath),
     table: resolveTable(cmd.table),
     limit,
     status,
+    taskID,
     app: cmd.app?.trim() || undefined,
     scene: cmd.scene?.trim() || undefined,
     paramsLike: cmd.paramsLike?.trim() || undefined,
@@ -891,7 +910,7 @@ function buildFilterOptions(cmd: {
 program
   .command("collect")
   .description("Start evalpkgs real-time collection in background")
-  .requiredOption("--task-id <value>", "Task identifier used by evalpkgs artifact output")
+  .requiredOption("--task-id <value>", "Task identifier used by evalpkgs artifact output (digits only)")
   .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
   .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
   .action(async (cmd: CollectOptions) => {
@@ -1012,6 +1031,7 @@ program
   .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
   .option("--limit <n>", "Maximum rows to fetch", "30")
   .option("--status <csv>", "Reported status list, comma-separated", "0,-1")
+  .option("--task-id <value>", "Filter by exact TaskID (digits)")
   .option("--app <value>", "Exact App filter")
   .option("--scene <value>", "Exact Scene filter")
   .option("--params-like <value>", "Params LIKE filter")
@@ -1039,6 +1059,7 @@ program
   .option("--bitable-url <url>", "Result Bitable URL (default from RESULT_BITABLE_URL)")
   .option("--limit <n>", "Maximum rows to fetch", "30")
   .option("--status <csv>", "Reported status list, comma-separated", "0,-1")
+  .option("--task-id <value>", "Filter by exact TaskID (digits)")
   .option("--batch-size <n>", "Batch create size (max 500)", "30")
   .option("--dry-run", "Print selected rows only, skip Feishu and writeback", false)
   .option("--app <value>", "Exact App filter")

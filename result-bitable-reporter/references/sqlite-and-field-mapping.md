@@ -38,6 +38,8 @@ Default query picks rows where:
 - Limited by `--limit` (default 30)
 
 Optional filters can narrow selection by app/scene/params/item/date/custom SQL predicate.
+For task-scoped workflows, pass `--task-id <TASK_ID>` so only current-task rows are selected.
+`TASK_ID` must be digits only.
 
 ## Collect Mode Validation
 
@@ -79,6 +81,7 @@ Inspect one pending/failed row:
 npx tsx scripts/result_reporter.ts filter \
   --db-path ~/.eval/records.sqlite \
   --table capture_results \
+  --task-id 20260206001 \
   --status 0,-1 \
   --limit 1
 ```

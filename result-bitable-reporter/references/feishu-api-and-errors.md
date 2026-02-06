@@ -44,9 +44,10 @@ Skill default:
 ## Practical Triage
 
 1. Use `--dry-run` to validate selection first.
-2. Confirm result table URL and field names.
-3. Inspect sqlite `report_error` values and repair mapping/env.
-4. Run `retry-reset`, then retry `report`.
+2. In task workflow, include `--task-id <TASK_ID>` to avoid cross-task uploads.
+3. Confirm result table URL and field names.
+4. Inspect sqlite `report_error` values and repair mapping/env.
+5. Run `retry-reset`, then retry `report`.
 
 ## Field Mapping Env Overrides
 
@@ -92,6 +93,7 @@ export RESULT_BITABLE_URL="https://.../wiki/...?...table=tbl_xxx&view=vew_xxx"
 npx tsx scripts/result_reporter.ts report \
   --db-path ~/.eval/records.sqlite \
   --table capture_results \
+  --task-id 20260206001 \
   --status 0,-1 \
   --batch-size 30 \
   --limit 100
@@ -102,6 +104,7 @@ Dry-run without Feishu write:
 ```bash
 npx tsx scripts/result_reporter.ts report \
   --dry-run \
+  --task-id 20260206001 \
   --status 0,-1 \
   --limit 10
 ```
@@ -114,6 +117,7 @@ npx tsx scripts/result_reporter.ts retry-reset \
   --table capture_results
 
 npx tsx scripts/result_reporter.ts report \
+  --task-id 20260206001 \
   --status 0,-1 \
   --batch-size 30 \
   --limit 100

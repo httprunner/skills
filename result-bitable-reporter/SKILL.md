@@ -10,15 +10,17 @@ Use this skill for a deterministic `sqlite -> Feishu` result pipeline around `ca
 ## Workflow
 
 1) Optional data collection:
-- `collect`: start background `evalpkgs run` for one device (`SerialNumber`) with `TaskID`.
+- `collect`: start background `evalpkgs run` for one device (`SerialNumber`) with `TaskID` (digits only).
 - `collect-stop`: stop that collector and print summary metrics (`delta`, `task_delta`, `jsonl_lines`, `runtime_sec`).
 
 2) Data selection:
 - `filter`: preview target sqlite rows (`capture_results`) before upload.
+- Task-scoped selection: pass `--task-id <TASK_ID>` to constrain rows to one task.
 - Default status filter is pending+failed (`reported IN (0, -1)`).
 
 3) Data reporting:
 - `report`: batch create Feishu records and write back sqlite status.
+- For per-task workflows, always pass `--task-id <TASK_ID>` to avoid cross-task uploads.
 - Success writeback: `reported=1`, `reported_at=now_ms`, `report_error=NULL`.
 - Failure writeback: `reported=-1`, `reported_at=now_ms`, `report_error=<truncated error>`.
 

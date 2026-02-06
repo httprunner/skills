@@ -7,6 +7,7 @@
 - 所有 `ai-vision` 命令在 `ai-vision` 目录执行。
 - 所有 `feishu-bitable-task-manager` 命令在 `feishu-bitable-task-manager` 目录执行。
 - 所有 `result-bitable-reporter` 命令在 `result-bitable-reporter` 目录执行。
+- `TASK_ID` 必须为数字（与 sqlite `TaskID` 列一致）。
 - 截图与相关产物输出目录由 `TASK_ID` 控制：若指定 `TASK_ID` 则写入 `~/.eval/<TASK_ID>/`，未指定则写入 `~/.eval/debug/`。
 - `ai-vision` 会返回已转换的绝对像素坐标，直接用于 `adb_helpers.ts` 操作。
 
@@ -33,7 +34,7 @@
   `export FEISHU_APP_ID=...`
   `export FEISHU_APP_SECRET=...`
   `export RESULT_BITABLE_URL="https://.../wiki/...?...table=tbl_xxx&view=vew_xxx"`
-  `npx tsx scripts/result_reporter.ts report --db-path ~/.eval/records.sqlite --table capture_results --status 0,-1 --batch-size 30 --limit 100`
+  `npx tsx scripts/result_reporter.ts report --db-path ~/.eval/records.sqlite --table capture_results --task-id TASK_ID --status 0,-1 --batch-size 30 --limit 100`
 
 ## 启动微信
 - 查看当前前台应用：
