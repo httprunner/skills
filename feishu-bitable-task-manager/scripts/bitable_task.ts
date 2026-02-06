@@ -349,6 +349,31 @@ async function FetchTasksForStatuses(opts: any, statusList: string[], limit: num
   };
 }
 
+async function FetchTasksForScenesAndStatuses(opts: any, sceneList: string[], statusList: string[], limit: number) {
+  const scenes = sceneList.length ? sceneList : [opts.scene || ""];
+  const tasks: Task[] = [];
+  let totalElapsed = 0;
+  let lastPageInfo = { hasMore: false, nextPageToken: "", pages: 0 };
+  for (const scene of scenes) {
+    const trimmed = (scene || "").trim();
+    if (!trimmed) continue;
+    const remaining = limit > 0 ? Math.max(limit - tasks.length, 0) : 0;
+    if (limit > 0 && remaining <= 0) break;
+    const perOpts = { ...opts, scene: trimmed };
+    if (limit > 0) perOpts.limit = remaining;
+    const res = await FetchTasksForStatuses(perOpts, statusList, limit > 0 ? remaining : 0);
+    if ("err" in res) return { err: true, code: res.code };
+    tasks.push(...res.tasks);
+    totalElapsed += res.elapsedSeconds;
+    lastPageInfo = res.pageInfo;
+    if (limit > 0 && tasks.length >= limit) {
+      tasks.splice(limit);
+      break;
+    }
+  }
+  return { tasks, elapsedSeconds: totalElapsed, pageInfo: lastPageInfo };
+}
+
 function parseCSVSet(raw: string) {
   const out: Record<string, boolean> = {};
   for (const part of raw.split(",")) {
@@ -903,6 +928,7 @@ async function ClaimTask(opts: any) {
 
   const statusList = parseCSVList(opts.status || "");
   const candidateStatuses = statusList.length ? statusList : ["pending", "failed"];
+  const sceneList = parseCSVList(opts.scene || "");
   const date = (opts.date || "").trim() || "Today";
   const candidateLimit = Number(opts.candidate_limit || 0) > 0 ? Number(opts.candidate_limit) : 5;
 
@@ -962,11 +988,12 @@ async function ClaimTask(opts: any) {
   }
 
   logger.debug("claim: fetch candidates", {
+    scene: sceneList.length ? sceneList.join(",") : scene,
     status: candidateStatuses.join(","),
     candidate_limit: candidateLimit,
     date,
   });
-  const candidates = await FetchTasksForStatuses({ ...commonOpts }, candidateStatuses, candidateLimit);
+  const candidates = await FetchTasksForScenesAndStatuses({ ...commonOpts }, sceneList, candidateStatuses, candidateLimit);
   if ("err" in candidates) return candidates.code;
   logger.debug("claim: candidates fetched", { count: candidates.tasks.length });
 

@@ -14,34 +14,26 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 - 具体命令已抽离到 `references/commands.md`，流程中只描述关键步骤。
 - 如需从飞书多维表格拉取搜索任务，使用 `feishu-bitable-task-manager` 获取任务参数后再进入对应流程。
 
-## 任务拉取（Feishu Bitable）
-
-- 当需要“从任务表获取搜索任务并执行”时，先用 `feishu-bitable-task-manager` 的 `claim` 获取任务（避免重复执行），将任务字段映射到本技能的参数。
-- 每次只拉取并执行 1 条任务（`--limit 1`），状态优先级使用 `--status pending,failed`。
-- 任务开始执行前通过 `feishu-bitable-task-manager` 更新该 `TaskID` 的 `Status`、`DispatchedDevice`、`DispatchedAt`、`StartAt`。
-
-### 综合页搜索任务
-- 过滤条件：`Scene=综合页搜索`、`App=com.tencent.mm`、`Date=Today`、`Status=pending/failed`。
-- 从任务记录中读取：
-  - `TaskID` 作为 `TASK_ID`
-  - `Params` 作为搜索关键词（可按逗号或换行拆分为 `KEYWORDS`）
-拿到记录后将 `TaskID` 作为 `TASK_ID`，`Params` 作为 `KEYWORDS` 进入“综合页搜索流程”。
-
-### 个人页搜索任务
-- 过滤条件：`Scene=个人页搜索`、`App=com.tencent.mm`、`Date=Today`、`Status=pending/failed`。
-- 从任务记录中读取：
-  - `TaskID` 作为 `TASK_ID`
-  - `UserName` 作为账号名称（`ACCOUNT_NAME`）
-  - `Params` 作为搜索关键词（可按逗号或换行拆分为 `KEYWORDS`）
-拿到记录后将 `TaskID` 作为 `TASK_ID`，`UserName` 作为 `ACCOUNT_NAME`，`Params` 作为 `KEYWORDS` 进入“个人页搜索流程”。
+## 前置处理
+- 设备预检：确认驱动与依赖可用，读取环境变量 `DEVICE_SERIAL` 获取设备 serial。
+- 任务拉取：
+  - 当需要“从任务表获取搜索任务并执行”时，先用 `feishu-bitable-task-manager` 的 `claim` 获取任务，将任务字段映射到本技能的参数。
+  - `claim` 默认拉取 `Date=Today` 且 status 为 `pending,failed` 的任务，并保证多节点多设备不会重复领取相同任务。
+  - 若在指令中指定场景类型，则拉取该场景的任务。
+    - 例如：`从飞书多维表格拉取一个微信视频号的综合页搜索的任务，开始执行`
+  - 若未指定场景类型，则按默认优先级 `--scene 个人页搜索,综合页搜索` 拉取。
+    - 例如：`从飞书多维表格拉取一个微信视频号的任务，开始执行`
+  - `claim` 已将该任务字段更新为：`Status=running`、`DispatchedDevice=<serial>`、`DispatchedAt=now`、`StartAt=now`。
+  - 根据任务的 `Scene` 进入对应流程：
+    - `综合页搜索` -> 综合页搜索流程
+    - `个人页搜索` -> 个人页搜索流程
+- 目录初始化：必须提供 `TASK_ID`，创建输出目录 `~/.eval/<TASK_ID>/`；若缺失则失败结束。
 
 ## 综合页搜索流程
 适用于“在视频号综合页搜索单个或多个关键词并遍历结果”的需求。
 
-### 1. 预检
-- 确认驱动与依赖可用，获取设备 serial，准备截图目录。
-- 若提供 `TASK_ID` 参数，创建输出目录 `~/.eval/<TASK_ID>/`；否则创建 `~/.eval/debug/`。
-- 确认已提供搜索词列表 `KEYWORDS`（逗号或换行分隔）。
+### 1. 任务参数校验
+- 任务信息必须提供搜索关键词（以逗号拆分为 `KEYWORDS`）
 
 ### 2. 启动微信
 - 若当前已在微信内，先使用 `android-adb` 的 `back-home` 命令返回手机桌面。
@@ -64,17 +56,11 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 - 频率要求：在结果页滚动过程中，每滑动 5 次检测一次是否已滑动到底。
 - 确认触底后：点击搜索框确保输入框激活 -> 清空 -> 输入下一个关键词 -> 触发搜索，直到完成所有关键词的遍历。
 
-### 7. 任务结束后的收尾逻辑
-- 所有关键词遍历完成后，使用 `android-adb` 的 `back-home` 命令返回手机桌面。
-- 基于任务执行结果调用 `feishu-bitable-task-manager` 更新该 `TaskID` 的 `Status` 和 `EndAt`
-
 ## 个人页搜索流程
 适用于“先进入某账号个人页，再在个人页内检索多个关键词并遍历结果”的需求。
 
-### 1. 预检
-- 确认驱动与依赖可用，获取设备 serial，准备截图目录。
-- 若提供 `TASK_ID` 参数，创建输出目录 `~/.eval/<TASK_ID>/`；否则创建 `~/.eval/debug/`。
-- 确认已提供账号名称 `ACCOUNT_NAME` 与关键词列表 `KEYWORDS`（逗号或换行分隔）。
+### 1. 任务参数校验
+- 任务信息必须提供：账号名称（`ACCOUNT_NAME`）和搜索关键词（以逗号拆分为 `KEYWORDS`）
 
 ### 2. 启动微信
 - 若当前已在微信内，先使用 `android-adb` 的 `back-home` 命令返回手机桌面。
@@ -99,9 +85,10 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 - 频率要求：在结果页滚动过程中，每滑动 5 次检测一次是否已滑动到底。
 - 每个关键词搜索前确认仍在该账号个人页；若误退出则重进个人页后继续。
 
-### 7. 任务结束后的收尾逻辑
-- 所有关键词遍历完成后，使用 `android-adb` 的 `back-home` 命令返回手机桌面。
-- 基于任务执行结果调用 `feishu-bitable-task-manager` 更新该 `TaskID` 的 `Status` 和 `EndAt`
+## 任务结束后的收尾逻辑
+- 若 `claim` 未获取任务，直接结束不做收尾。
+- 所有关键词遍历完成后，使用 `android-adb` 的 `back-home` 命令返回手机桌面
+- 调用 `feishu-bitable-task-manager` 更新该 `TaskID` 的字段：`Status` -> `success/failed`（基于任务执行结果）、`EndAt` ->`now`
 
 ## 备注与排障
 - 点击不准：重新截图，让 ai-vision 提供更精确坐标（不要改用 `dump-ui`）。

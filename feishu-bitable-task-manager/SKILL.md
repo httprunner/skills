@@ -35,6 +35,7 @@ Follow the task table conventions when pulling and updating tasks in Feishu Bita
 
 6) Claim tasks for multi-worker execution.
 - Use `claim` to atomically-ish bind a task to a device (running + DispatchedDevice) and verify by re-reading the record.
+- `--scene` supports comma-separated priority list (e.g. `个人页搜索,综合页搜索`); earlier scenes are fetched first.
 - If `GET record` fails, wait 1s and fall back to search by `TaskID`.
 
 7) Update task status/metadata.
@@ -83,7 +84,7 @@ Use `--raw` when you need the `record_id` for follow-up updates.
 ```bash
 npx tsx scripts/bitable_task.ts claim \
   --app com.tencent.mm \
-  --scene 综合页搜索 \
+  --scene 个人页搜索,综合页搜索 \
   --device-serial <serial> \
   --status pending,failed \
   --date Today \

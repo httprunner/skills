@@ -5,6 +5,8 @@ Use `claim` to safely grab a single task across multiple machines by updating th
 ## Claim flow
 
 1) Fetch candidates by `App + Scene + Status + Date`.
+   - `Scene` supports comma-separated priority list, e.g. `个人页搜索,综合页搜索`.
+   - It attempts earlier scenes first, then falls back to later scenes when no tasks are found.
 2) For each candidate, set:
    - `Status = running`
    - `DispatchedDevice = <device_serial>`
