@@ -64,25 +64,23 @@
   `export FEISHU_APP_ID=...`
   `export FEISHU_APP_SECRET=...`
   `export TASK_BITABLE_URL="https://.../base/APP_TOKEN?table=TABLE_ID"`
-  `npx tsx scripts/bitable_task.ts fetch --app com.tencent.mm --scene 综合页搜索 --status pending,failed --date Today --limit 1`
+  `npx tsx scripts/bitable_task.ts claim --app com.tencent.mm --scene 综合页搜索 --device-serial SERIAL --status pending,failed --date Today --log-level debug`
 - 映射参数：
   `TaskID -> TASK_ID`
   `Params -> KEYWORDS`（逗号或换行拆分）
- - 拉取后更新状态为 running：
-  `npx tsx scripts/bitable_task.ts update --task-id TASK_ID --status running --device-serial SERIAL --dispatched-at now --start-at now`
+ - `claim` 成功后任务已进入 `running` 且绑定设备，无需再次 update
 
 ### 个人页搜索
 - 拉取任务：
   `export FEISHU_APP_ID=...`
   `export FEISHU_APP_SECRET=...`
   `export TASK_BITABLE_URL="https://.../base/APP_TOKEN?table=TABLE_ID"`
-  `npx tsx scripts/bitable_task.ts fetch --app com.tencent.mm --scene 个人页搜索 --status pending,failed --date Today --limit 1`
+  `npx tsx scripts/bitable_task.ts claim --app com.tencent.mm --scene 个人页搜索 --device-serial SERIAL --status pending,failed --date Today --log-level debug`
 - 映射参数：
   `TaskID -> TASK_ID`
   `UserName -> ACCOUNT_NAME`
   `Params -> KEYWORDS`（逗号或换行拆分）
- - 拉取后更新状态为 running：
-  `npx tsx scripts/bitable_task.ts update --task-id TASK_ID --status running --device-serial SERIAL --dispatched-at now --start-at now`
+ - `claim` 成功后任务已进入 `running` 且绑定设备，无需再次 update
 
 ## Feishu 任务完成收尾
 - 任务成功完成：

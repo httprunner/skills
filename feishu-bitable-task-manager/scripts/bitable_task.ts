@@ -34,13 +34,16 @@ const appGroupLabels: Record<string, string> = {
   "com.smile.gifmaker": "快手",
 };
 
-type LogLevel = "info" | "error";
+type LogLevel = "debug" | "info" | "error";
+const levelRank: Record<LogLevel, number> = { debug: 10, info: 20, error: 30 };
 
-function createLogger(json: boolean, stream: NodeJS.WriteStream, color: boolean) {
+function createLogger(json: boolean, stream: NodeJS.WriteStream, color: boolean, minLevel: LogLevel) {
   const useColor = color && !json;
   const levelColor = (value: string, level: LogLevel) => {
     if (!useColor) return value;
-    return level === "error" ? chalk.red(value) : chalk.green(value);
+    if (level === "error") return chalk.red(value);
+    if (level === "debug") return chalk.gray(value);
+    return chalk.green(value);
   };
   const keyColor = (value: string) => (useColor ? chalk.blue(value) : value);
   const msgColor = (value: string) => (useColor ? chalk.green(value) : value);
@@ -56,6 +59,7 @@ function createLogger(json: boolean, stream: NodeJS.WriteStream, color: boolean)
     return JSON.stringify(value);
   }
   function write(level: LogLevel, msg: string, fields?: Record<string, unknown>) {
+    if (levelRank[level] < levelRank[minLevel]) return;
     const time = new Date().toISOString();
     if (json) {
       const payload: Record<string, unknown> = { time, level: level.toUpperCase(), msg };
@@ -76,25 +80,34 @@ function createLogger(json: boolean, stream: NodeJS.WriteStream, color: boolean)
     stream.write(parts.join(" ") + "\n");
   }
   return {
+    debug: (msg: string, fields?: Record<string, unknown>) => write("debug", msg, fields),
     info: (msg: string, fields?: Record<string, unknown>) => write("info", msg, fields),
     error: (msg: string, fields?: Record<string, unknown>) => write("error", msg, fields),
   };
 }
 
-let logger = createLogger(false, process.stdout, Boolean(process.stdout.isTTY));
-let errLogger = createLogger(false, process.stderr, Boolean(process.stderr.isTTY));
+let logger = createLogger(false, process.stdout, Boolean(process.stdout.isTTY), "info");
+let errLogger = createLogger(false, process.stderr, Boolean(process.stderr.isTTY), "info");
 
-function setLoggerJSON(enabled: boolean) {
+function normalizeLogLevel(raw: string | undefined) {
+  const v = (raw || "").trim().toLowerCase();
+  if (v === "debug") return "debug" as LogLevel;
+  if (v === "error") return "error" as LogLevel;
+  return "info" as LogLevel;
+}
+
+function setLoggerJSON(enabled: boolean, level: LogLevel) {
   const outColor = Boolean(process.stdout.isTTY) && !enabled;
   const errColor = Boolean(process.stderr.isTTY) && !enabled;
-  logger = createLogger(enabled, process.stdout, outColor);
-  errLogger = createLogger(enabled, process.stderr, errColor);
+  logger = createLogger(enabled, process.stdout, outColor, level);
+  errLogger = createLogger(enabled, process.stderr, errColor, level);
 }
 
 function getGlobalOptions(program: Command) {
-  const opts = program.opts<{ logJson?: boolean }>();
-  setLoggerJSON(Boolean(opts.logJson));
-  return { logJson: Boolean(opts.logJson) };
+  const opts = program.opts<{ logJson?: boolean; logLevel?: string }>();
+  const level = normalizeLogLevel(opts.logLevel);
+  setLoggerJSON(Boolean(opts.logJson), level);
+  return { logJson: Boolean(opts.logJson), logLevel: level };
 }
 
 type Task = {
@@ -310,6 +323,32 @@ async function FetchTasksOnce(opts: any): Promise<FetchResult | { err: true; cod
   };
 }
 
+async function FetchTasksForStatuses(opts: any, statusList: string[], limit: number) {
+  const tasks: Task[] = [];
+  let totalElapsed = 0;
+  let lastPageInfo = { hasMore: false, nextPageToken: "", pages: 0 };
+  for (const status of statusList) {
+    const remaining = limit > 0 ? Math.max(limit - tasks.length, 0) : 0;
+    if (limit > 0 && remaining <= 0) break;
+    const perOpts = { ...opts, status };
+    if (limit > 0) perOpts.limit = remaining;
+    const res = await FetchTasksOnce(perOpts);
+    if ("err" in res) return { err: true, code: res.code };
+    tasks.push(...res.tasks);
+    totalElapsed += res.elapsedSeconds;
+    lastPageInfo = { hasMore: res.hasMore, nextPageToken: res.nextPageToken, pages: res.pages };
+    if (limit > 0 && tasks.length >= limit) {
+      tasks.splice(limit);
+      break;
+    }
+  }
+  return {
+    tasks,
+    elapsedSeconds: totalElapsed,
+    pageInfo: lastPageInfo,
+  };
+}
+
 function parseCSVSet(raw: string) {
   const out: Record<string, boolean> = {};
   for (const part of raw.split(",")) {
@@ -331,6 +370,12 @@ function parseCSVList(raw: string) {
     out.push(p);
   }
   return out;
+}
+
+function parseStaleMillis(value: string) {
+  const [ms, ok] = CoerceMillis(value);
+  if (ok && ms > 0) return ms;
+  return 0;
 }
 
 async function FetchTasks(opts: any) {
@@ -779,6 +824,199 @@ async function UpdateTasks(opts: any) {
   return errorsList.length ? 1 : 0;
 }
 
+async function getRecordFields(baseURL: string, token: string, ref: BitableRef, recordID: string) {
+  const urlStr = `${baseURL.replace(/\/+$/, "")}/open-apis/bitable/v1/apps/${ref.AppToken}/tables/${ref.TableID}/records/${encodeURIComponent(recordID)}`;
+  const resp = await RequestJSON("GET", urlStr, token, null, true);
+  if (resp.code !== 0) throw new Error(`get record failed: code=${resp.code} msg=${resp.msg}`);
+  return resp.data?.record?.fields || {};
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getRecordFieldsByTaskID(baseURL: string, token: string, ref: BitableRef, fieldsMap: Record<string, string>, taskID: number, ignoreView: boolean, viewID: string) {
+  if (!taskID || taskID <= 0) return null;
+  const taskField = (fieldsMap["TaskID"] || "").trim();
+  const filterObj = buildIDFilter(taskField, [String(taskID)]);
+  if (!filterObj) return null;
+  const items = await searchItems(baseURL, token, ref, filterObj, 1, ignoreView, viewID);
+  if (!items.length) return null;
+  return items[0]?.fields || null;
+}
+
+async function ClaimTask(opts: any) {
+  const taskURL = (opts.task_url || "").trim();
+  if (!taskURL) {
+    errLogger.error("TASK_BITABLE_URL is required");
+    return 2;
+  }
+  const appID = Env("FEISHU_APP_ID", "");
+  const appSecret = Env("FEISHU_APP_SECRET", "");
+  if (!appID || !appSecret) {
+    errLogger.error("FEISHU_APP_ID/FEISHU_APP_SECRET are required");
+    return 2;
+  }
+  const app = (opts.app || "").trim();
+  const scene = (opts.scene || "").trim();
+  if (!app || !scene) {
+    errLogger.error("--app and --scene are required");
+    return 2;
+  }
+  const deviceSerial = (opts.device_serial || "").trim();
+  if (!deviceSerial) {
+    errLogger.error("--device-serial is required");
+    return 2;
+  }
+
+  const baseURL = Env("FEISHU_BASE_URL", DefaultBaseURL);
+  const fieldsMap = LoadTaskFieldsFromEnv();
+  let ref: BitableRef;
+  try {
+    ref = ParseBitableURL(taskURL);
+  } catch (err: any) {
+    errLogger.error("parse bitable URL failed", { err: err?.message || String(err) });
+    return 2;
+  }
+  let token: string;
+  try {
+    token = await GetTenantAccessToken(baseURL, appID, appSecret);
+  } catch (err: any) {
+    errLogger.error("get tenant access token failed", { err: err?.message || String(err) });
+    return 2;
+  }
+  if (!ref.AppToken) {
+    if (!ref.WikiToken) {
+      errLogger.error("bitable URL missing app_token and wiki_token");
+      return 2;
+    }
+    try {
+      ref.AppToken = await ResolveWikiAppToken(baseURL, token, ref.WikiToken);
+    } catch (err: any) {
+      errLogger.error("resolve wiki app token failed", { err: err?.message || String(err) });
+      return 2;
+    }
+  }
+
+  let viewID = (opts.view_id || "").trim();
+  if (!viewID) viewID = ref.ViewID;
+
+  const statusList = parseCSVList(opts.status || "");
+  const candidateStatuses = statusList.length ? statusList : ["pending", "failed"];
+  const date = (opts.date || "").trim() || "Today";
+  const candidateLimit = Number(opts.candidate_limit || 0) > 0 ? Number(opts.candidate_limit) : 5;
+
+  const staleMinutes = Number(opts.stale_minutes || 0) > 0 ? Number(opts.stale_minutes) : 45;
+  const staleActionRaw = String(opts.stale_action || "").trim().toLowerCase();
+  const staleAction = ["failed", "pending", "log", "skip"].includes(staleActionRaw) ? staleActionRaw : "failed";
+  const staleLimit = Number(opts.stale_limit || 0) >= 0 ? Number(opts.stale_limit) : 200;
+  const ignoreView = Boolean(opts.ignore_view);
+  const fallbackWaitMs = 1000;
+
+  const commonOpts = {
+    task_url: taskURL,
+    app,
+    scene,
+    date,
+    page_size: 200,
+    ignore_view: ignoreView,
+    view_id: viewID,
+  };
+
+  if (staleMinutes > 0 && staleAction !== "skip") {
+    logger.debug("claim: scan stale running tasks", {
+      stale_minutes: staleMinutes,
+      stale_action: staleAction,
+      stale_limit: staleLimit,
+    });
+    const staleFetch = await FetchTasksForStatuses({ ...commonOpts }, ["running"], staleLimit);
+    if ("err" in staleFetch) return staleFetch.code;
+    logger.debug("claim: running tasks fetched", { count: staleFetch.tasks.length });
+    const now = Date.now();
+    const staleUpdates: { record_id: string; fields: any }[] = [];
+    for (const t of staleFetch.tasks) {
+      const startValue = t.start_at || t.dispatched_at;
+      if (!startValue) continue;
+      const ms = parseStaleMillis(startValue);
+      if (!ms) continue;
+      const ageMinutes = (now - ms) / 60000;
+      if (ageMinutes < staleMinutes) continue;
+      if (staleAction === "log") continue;
+      const fields = buildUpdateFields(fieldsMap, {
+        status: staleAction === "pending" ? "pending" : "failed",
+        end_at: now,
+        logs: "stale running timeout",
+      });
+      if (Object.keys(fields).length) staleUpdates.push({ record_id: t.record_id, fields });
+    }
+    for (let i = 0; i < staleUpdates.length; i += updateMaxBatchSize) {
+      const batch = staleUpdates.slice(i, i + updateMaxBatchSize);
+      try {
+        logger.debug("claim: update stale running batch", { count: batch.length });
+        await batchUpdateRecords(baseURL, token, ref, batch);
+      } catch (err: any) {
+        errLogger.error("update stale running tasks failed", { err: err?.message || String(err) });
+        return 2;
+      }
+    }
+  }
+
+  logger.debug("claim: fetch candidates", {
+    status: candidateStatuses.join(","),
+    candidate_limit: candidateLimit,
+    date,
+  });
+  const candidates = await FetchTasksForStatuses({ ...commonOpts }, candidateStatuses, candidateLimit);
+  if ("err" in candidates) return candidates.code;
+  logger.debug("claim: candidates fetched", { count: candidates.tasks.length });
+
+  for (const t of candidates.tasks) {
+    logger.debug("claim: try candidate", { task_id: t.task_id, record_id: t.record_id });
+    const updFields = buildUpdateFields(fieldsMap, {
+      status: "running",
+      device_serial: deviceSerial,
+      dispatched_at: "now",
+      start_at: "now",
+    });
+    if (!Object.keys(updFields).length) continue;
+    try {
+      logger.debug("claim: update candidate", { task_id: t.task_id, record_id: t.record_id });
+      await updateRecord(baseURL, token, ref, t.record_id, updFields);
+    } catch (err: any) {
+      errLogger.error("claim update failed", { err: err?.message || String(err), record_id: t.record_id });
+      continue;
+    }
+    let fields: any = {};
+    try {
+      logger.debug("claim: verify candidate", { task_id: t.task_id, record_id: t.record_id });
+      fields = await getRecordFields(baseURL, token, ref, t.record_id);
+    } catch (err: any) {
+      errLogger.error("claim verify failed", { err: err?.message || String(err), record_id: t.record_id });
+      try {
+        logger.debug("claim: verify fallback wait", { task_id: t.task_id, record_id: t.record_id, wait_ms: fallbackWaitMs });
+        await sleep(fallbackWaitMs);
+        logger.debug("claim: verify fallback search", { task_id: t.task_id, record_id: t.record_id });
+        const fallback = await getRecordFieldsByTaskID(baseURL, token, ref, fieldsMap, t.task_id, ignoreView, viewID);
+        if (fallback) fields = fallback;
+      } catch (fallbackErr: any) {
+        errLogger.error("claim verify fallback failed", { err: fallbackErr?.message || String(fallbackErr), record_id: t.record_id });
+        continue;
+      }
+      if (!fields || !Object.keys(fields).length) continue;
+    }
+    const status = NormalizeBitableValue(fields[fieldsMap["Status"]]).trim().toLowerCase();
+    const dispatchedDevice = NormalizeBitableValue(fields[fieldsMap["DispatchedDevice"]]).trim();
+    logger.debug("claim: verify result", { task_id: t.task_id, status, dispatched_device: dispatchedDevice });
+    if (status === "running" && dispatchedDevice === deviceSerial) {
+      logger.info("claimed", { task: t });
+      return 0;
+    }
+  }
+
+  logger.info("claimed", { task: null });
+  return 0;
+}
+
 async function updateRecord(baseURL: string, token: string, ref: BitableRef, recordID: string, fields: any) {
   const urlStr = `${baseURL.replace(/\/+$/, "")}/open-apis/bitable/v1/apps/${ref.AppToken}/tables/${ref.TableID}/records/${encodeURIComponent(recordID)}`;
   const payload = { fields };
@@ -1225,7 +1463,8 @@ async function main() {
     .description("Feishu Bitable task manager")
     .showHelpAfterError()
     .showSuggestionAfterError()
-    .option("--log-json", "Output logs in JSON");
+    .option("--log-json", "Output logs in JSON")
+    .option("--log-level <level>", "Log level: debug|info|error (default: info)");
 
   const ensureGlobal = () => {
     getGlobalOptions(program);
@@ -1407,6 +1646,50 @@ async function main() {
       if (options.useView) opts.ignore_view = false;
       if (options.viewId) opts.view_id = options.viewId;
       process.exit(await CreateTasks(opts));
+    });
+
+  program
+    .command("claim")
+    .description("Claim one task with optimistic lock and device binding")
+    .option("--task-url <url>", "Bitable task table URL")
+    .option("--app <value>", "App value for filter (required)")
+    .option("--scene <value>", "Scene value for filter (required)")
+    .option("--status <value>", "Task status filter; supports comma-separated priority list (default: pending,failed)")
+    .option("--date <value>", "Date preset: Today/Yesterday/Any")
+    .option("--device-serial <val>", "Device serial to bind (required)")
+    .option("--candidate-limit <n>", "Max candidates to attempt (default: 5)")
+    .option("--stale-minutes <n>", "Minutes to mark running tasks as stale (default: 45)")
+    .option("--stale-action <value>", "Stale action: failed|pending|log|skip (default: failed)")
+    .option("--stale-limit <n>", "Max running tasks to scan (default: 200; 0 = no cap)")
+    .option("--ignore-view", "Ignore view_id when searching (default: true)")
+    .option("--use-view", "Use view_id from URL")
+    .option("--view-id <id>", "Override view_id when searching")
+    .action(async (options) => {
+      ensureGlobal();
+      const opts: any = {
+        task_url: process.env.TASK_BITABLE_URL || "",
+        status: "pending,failed",
+        date: "Today",
+        candidate_limit: 5,
+        stale_minutes: 45,
+        stale_action: "failed",
+        stale_limit: 200,
+        ignore_view: true,
+      };
+      if (options.taskUrl) opts.task_url = options.taskUrl;
+      if (options.app) opts.app = options.app;
+      if (options.scene) opts.scene = options.scene;
+      if (options.status) opts.status = options.status;
+      if (options.date) opts.date = options.date;
+      if (options.deviceSerial) opts.device_serial = options.deviceSerial;
+      if (options.candidateLimit) opts.candidate_limit = options.candidateLimit;
+      if (options.staleMinutes) opts.stale_minutes = options.staleMinutes;
+      if (options.staleAction) opts.stale_action = options.staleAction;
+      if (options.staleLimit != null) opts.stale_limit = options.staleLimit;
+      if (options.ignoreView) opts.ignore_view = true;
+      if (options.useView) opts.ignore_view = false;
+      if (options.viewId) opts.view_id = options.viewId;
+      process.exit(await ClaimTask(opts));
     });
 
   if (argv.length === 0) {

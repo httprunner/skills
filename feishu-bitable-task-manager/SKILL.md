@@ -33,19 +33,23 @@ Follow the task table conventions when pulling and updating tasks in Feishu Bita
 5) Validate decoded tasks.
 - Keep only rows with `TaskID != 0` and at least one of `Params`, `ItemID`, `BookID`, `URL`, `UserID`, `UserName`.
 
-6) Update task status/metadata.
+6) Claim tasks for multi-worker execution.
+- Use `claim` to atomically-ish bind a task to a device (running + DispatchedDevice) and verify by re-reading the record.
+- If `GET record` fails, wait 1s and fall back to search by `TaskID`.
+
+7) Update task status/metadata.
 - Resolve `record_id` from `TaskID` or `BizTaskID` when needed.
 - Use `records/batch_update` for multiple updates, `records/{record_id}` for single updates.
 - Apply status + timing + metrics updates using the task table field mapping.
 - For JSONL ingestion, update any fields whose keys match column names, and map `CDNURL`/`cdn_url` to `Extra`.
 - Use `--skip-status` to skip updates for tasks already in a given status (comma-separated).
 
-7) Create tasks.
+8) Create tasks.
 - Use `records/batch_create` for multiple tasks, `records` for single create.
 - Accept JSON/JSONL input (same key conventions as update); map `CDNURL`/`cdn_url` to `Extra`.
 - Use `--skip-existing <fields>` to skip creation when existing records match on the given fields (all must match).
 
-8) Derive tasks from a source Bitable (原始多维表格).
+9) Derive tasks from a source Bitable (原始多维表格).
 - Source core fields: `BID`, `短剧名`, `维权场景`, `主角名`, `付费剧名`.
 - Filter source records: `BID` non-empty AND `BID` != `暂无` AND `短剧名` non-empty AND `维权场景` non-empty.
 - Before creating, query today’s tasks once and build a `BookID` set. Use task-table filter `App=com.smile.gifmaker`, `Scene=综合页搜索`, `Date=Today`, then skip any source record whose `BID` exists in the fetched `BookID` set.
@@ -77,10 +81,20 @@ npx tsx scripts/bitable_task.ts fetch --biz-task-id ext-20240101-001 --raw
 Use `--raw` when you need the `record_id` for follow-up updates.
 
 ```bash
+npx tsx scripts/bitable_task.ts claim \
+  --app com.tencent.mm \
+  --scene 综合页搜索 \
+  --device-serial <serial> \
+  --status pending,failed \
+  --date Today \
+  --log-level debug
+```
+
+```bash
 npx tsx scripts/bitable_task.ts update \
   --task-id 180413 \
   --status running \
-  --device-serial 1fa20bb \
+  --device-serial <serial> \
   --dispatched-at now
 ```
 
@@ -210,8 +224,9 @@ Notes:
 
 - Read `references/task-fetch.md` for filters, pagination, validation, and field mapping.
 - Read `references/task-update.md` for status updates, timing fields, and batch update rules.
+- Read `references/task-claim.md` for cross-machine safe task claiming.
 - Read `references/task-create.md` for create payload rules and batch create behavior.
 - Read `references/feishu-integration.md` for Feishu API endpoints and request/response payloads.
-- `scripts/bitable_task.ts`: single CLI entrypoint (`fetch`/`update`/`create`).
+- `scripts/bitable_task.ts`: single CLI entrypoint (`fetch`/`claim`/`update`/`create`).
 - `scripts/bitable_derive.ts`: derive tasks from a source Bitable and create tasks in the task table.
 - `scripts/bitable_common.ts`: Feishu OpenAPI HTTP + token/wiki helpers + value/timestamp coercion + env field mapping.

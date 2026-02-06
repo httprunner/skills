@@ -16,7 +16,7 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 
 ## 任务拉取（Feishu Bitable）
 
-- 当需要“从任务表获取搜索任务并执行”时，先用 `feishu-bitable-task-manager` 拉取任务，将任务字段映射到本技能的参数。
+- 当需要“从任务表获取搜索任务并执行”时，先用 `feishu-bitable-task-manager` 的 `claim` 获取任务（避免重复执行），将任务字段映射到本技能的参数。
 - 每次只拉取并执行 1 条任务（`--limit 1`），状态优先级使用 `--status pending,failed`。
 - 任务开始执行前通过 `feishu-bitable-task-manager` 更新该 `TaskID` 的 `Status`、`DispatchedDevice`、`DispatchedAt`、`StartAt`。
 
