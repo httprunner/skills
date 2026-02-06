@@ -15,11 +15,14 @@ Use this skill to run an explicit SQLite -> Feishu result reporting pipeline.
 - Optional SQLite knobs: `TRACKING_STORAGE_DB_PATH`, `RESULT_SQLITE_TABLE`.
 
 2) (Optional) Run real-time collection into shared sqlite.
-- Use `collect` to start `evalpkgs run --log-level debug` in foreground.
+- Use `collect` to start `evalpkgs run --log-level debug` in background.
 - Require env: `BUNDLE_ID`, `SerialNumber`.
 - Require `--task-id`; the command injects `TaskID=<task-id>` into evalpkgs.
-- `collect` checks sqlite row delta in `capture_results` before/after exit.
-- `collect` strictly requires new/updated files under `~/.eval/<TaskID>/`; otherwise it fails with a capability error.
+- `collect` enforces at most one collector process per `SerialNumber`.
+- If a collector already exists for this device, `collect` stops it first and then starts a new one.
+- Use `collect-stop` to stop background collection and print summary metrics:
+  `before_count/after_count/delta/task_delta/jsonl_lines/runtime_sec`.
+- `collect-stop` supports fast/slow settle tuning via `--wait-ms` and `--stable-ms`.
 
 3) Preview rows before upload.
 - Use `filter` first to confirm selected rows.
@@ -45,7 +48,7 @@ npx tsx scripts/result_reporter.ts <subcommand> [flags]
 ## Commands
 
 ### collect
-Run eval collection in foreground and verify `capture_results` increment.
+Start eval collection in background.
 
 ```bash
 export BUNDLE_ID=com.tencent.mm
@@ -56,7 +59,25 @@ npx tsx scripts/result_reporter.ts collect \
   --table capture_results
 ```
 
-Stop with `Ctrl+C`. The command prints `before_count`, `after_count`, and `delta`.
+### collect-stop
+Stop background collection and print collected row delta.
+
+```bash
+export SerialNumber=1fa20bb
+npx tsx scripts/result_reporter.ts collect-stop
+```
+
+Prefer faster stop/return:
+
+```bash
+SerialNumber=1fa20bb npx tsx scripts/result_reporter.ts collect-stop --wait-ms 3000 --stable-ms 800
+```
+
+Prefer steadier sqlite settle before counting:
+
+```bash
+SerialNumber=1fa20bb npx tsx scripts/result_reporter.ts collect-stop --wait-ms 15000 --stable-ms 3000
+```
 
 ### filter
 Print selected sqlite rows as JSONL.
@@ -146,6 +167,6 @@ Payload field names default to the standard result-table field set and can be ov
 
 ## Resources
 
-- `scripts/result_reporter.ts`: CLI entrypoint for collect/filter/report/retry-reset.
+- `scripts/result_reporter.ts`: CLI entrypoint for collect/collect-stop/filter/report/retry-reset.
 - `references/sqlite-and-field-mapping.md`: sqlite schema and writeback semantics.
 - `references/feishu-api-and-errors.md`: Feishu APIs and common failure handling.

@@ -41,18 +41,22 @@ Optional filters can narrow selection by app/scene/params/item/date/custom SQL p
 
 ## Collect Mode Validation
 
-`collect` performs a non-writeback validation around `capture_results`:
+`collect` and `collect-stop` perform a non-writeback validation around `capture_results`:
 
-- query row count before starting eval collection
-- run eval collection in foreground
-- query row count after exit
-- print `delta = after - before`
+- `collect` records `before_count` and starts eval collection in background
+- `collect` enforces one active collector process per `SerialNumber` (old one will be stopped first)
+- `collect-stop` terminates collector by `SerialNumber`
+- `collect-stop` queries `after_count` and prints:
+  - `delta`: total row increment in table
+  - `task_delta`: new rows for current `TaskID` after start snapshot
+  - `jsonl_lines`: raw collected event line count in `~/.eval/<TaskID>/*.jsonl`
+  - `runtime_sec`: collection runtime in seconds
 
 `collect` does not update `reported/reported_at/report_error`; those fields remain managed by `report` and `retry-reset`.
 
 ## Command Examples
 
-Run real-time collection (foreground, stop with `Ctrl+C`):
+Run real-time collection in background:
 
 ```bash
 export BUNDLE_ID=com.tencent.mm
@@ -61,6 +65,24 @@ npx tsx scripts/result_reporter.ts collect \
   --task-id 20260206001 \
   --db-path ~/.eval/records.sqlite \
   --table capture_results
+```
+
+Stop one device collector and print collected delta:
+
+```bash
+SerialNumber=1fa20bb npx tsx scripts/result_reporter.ts collect-stop
+```
+
+Fast return (lower settle wait):
+
+```bash
+SerialNumber=1fa20bb npx tsx scripts/result_reporter.ts collect-stop --wait-ms 3000 --stable-ms 800
+```
+
+Safer settle (higher wait, better for delayed sqlite flush):
+
+```bash
+SerialNumber=1fa20bb npx tsx scripts/result_reporter.ts collect-stop --wait-ms 15000 --stable-ms 3000
 ```
 
 Inspect one pending/failed row:
