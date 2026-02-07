@@ -1,82 +1,43 @@
 ---
 name: android-adb
-description: Android device control and UI automation via ADB with a TypeScript helper CLI. Use when tasks involve connecting to devices/emulators, running adb shell commands, tapping/swiping, key events, text input, app launch, screenshots, or general device management through adb.
+description: Android device control and UI automation via ADB using a TypeScript helper CLI. Use for device/emulator discovery, USB or Wi-Fi connection, app launch/force-stop, tap/swipe/keyevent/text input, screenshots, APK install handling, and ADB troubleshooting. Use with ai-vision for screenshot-based UI recognition and coordinate decisions.
 ---
 
-# ADB (TypeScript)
+# Android ADB Automation
 
-Use this skill to drive Android devices with `adb` and the TypeScript helper CLI for common device management and UI actions.
+Execute Android operations with `scripts/adb_helpers.ts` in the `android-adb` skill directory.
 
-## Quick workflow
+## Core Capabilities
 
-- Identify device: `adb devices -l`. If multiple devices, always use `-s <device_id>`.
-- Verify readiness: device status should be `device`.
-- Prefer deterministic actions: tap/swipe/keyevent via `adb shell input`.
-- For text: prefer ADB Keyboard broadcast if installed; otherwise escape text for `adb shell input text`.
-- For screenshots: use `adb exec-out screencap -p > file.png` when possible. Prefer a shared directory `~/.eval/screenshots/` and add timestamps to avoid overwriting.
+- Device discovery and connection management.
+- App lifecycle control (`launch`, `force-stop`).
+- Input primitives (`tap`, `swipe`, `long-press`, `keyevent`, `text`).
+- Screenshot and UI dump utilities (`screenshot`, `dump-ui --parse`).
+- Install automation with UI assistance (`install-smart`).
 
-## UI Inspection (Text-Based)
+## Execution Constraints
 
-- Dump UI: `npx tsx scripts/adb_helpers.ts dump-ui --parse`
-  - Creates `window_dump.xml` locally.
-  - `--parse` outputs clickable elements (buttons) and input fields (EditText).
-- Use this to find coordinates for `tap` or text/resource-ids for validation.
+- Use `-s <device_id>` whenever more than one device is connected.
+- Confirm resolution before coordinate actions: `npx tsx scripts/adb_helpers.ts -s SERIAL wm-size`.
+- Run each `npx` command in its owning skill directory (`android-adb` or `ai-vision`).
+- Prefer helper subcommands before raw `adb` calls.
+- Prefer `text --adb-keyboard` when ADB Keyboard exists; otherwise use plain `text`.
+- Ask for missing required inputs before executing (serial, package/activity/schema, coordinates, APK path).
+- Surface actionable stderr on failure (authorization, cable/network, tcpip state, missing env vars).
 
-## UI Inspection (Vision-Based via ai-vision)
+## Reference Map
 
-If `dump-ui` returns empty/partial trees, call the `ai-vision` skill to infer coordinates from a screenshot, then feed those coordinates into `adb` taps. This keeps UI understanding separate from device control. `ai-vision` returns absolute pixel coordinates ready for `adb_helpers`.
+- Command catalog and examples: `references/adb-reference.md`
+- Vision-first UI recognition flow: `references/ui-recognition.md`
+- Installer dialog handling details: `references/install-smart.md`
 
-Quick flow:
-1. Capture screenshot.
-2. Use `ai-vision` to query coordinates or assert UI text.
-3. Apply returned `(x, y)` with `npx tsx scripts/adb_helpers.ts tap X Y`.
+Load only the file needed for the current task.
 
-Example:
-```bash
-# 1) Screenshot
-mkdir -p ~/.eval/screenshots
-SCREENSHOT=~/.eval/screenshots/ui_$(date +"%Y%m%d_%H%M%S").png
-npx tsx scripts/adb_helpers.ts -s SERIAL screenshot -out "$SCREENSHOT"
-
-# 2) Query coordinates with ai-vision
-npx tsx ../ai-vision/scripts/ai_vision.ts query \
-  --screenshot "$SCREENSHOT" \
-  --prompt "请识别屏幕上与“搜索”相关的文字或放大镜图标，并返回其坐标"
-
-# 3) Tap returned coordinates (absolute pixels)
-npx tsx scripts/adb_helpers.ts -s SERIAL tap X Y
-```
-
-Notes:
-- Keep prompts explicit (exact text/icon description + request center coordinates).
-- Validate by taking another screenshot and retrying with a tighter prompt if needed.
-
-## When running commands
-
-- Always include `-s <device_id>` if more than one device is connected.
-- If the request is ambiguous, ask for device id, package name, or coordinates.
-- Use `adb shell wm size` to confirm screen resolution before coordinate-based actions.
-- Treat errors from `adb` as actionable: surface stderr and suggest fixes (authorization, cable, tcpip).
-
-## Resources
-
-- Reference guide: `references/adb-reference.md`.
-- Helper script: `scripts/adb_helpers.ts` (subcommand-based CLI wrapper). Use it for repeatable tasks or when multiple steps are needed.
-
-## Script usage
-
-Run:
+## Minimal Commands
 
 ```bash
 npx tsx scripts/adb_helpers.ts --help
+npx tsx scripts/adb_helpers.ts devices
+npx tsx scripts/adb_helpers.ts -s SERIAL wm-size
+npx tsx scripts/adb_helpers.ts -s SERIAL screenshot -out ~/.eval/screenshots/shot.png
 ```
-
-Prefer script subcommands for:
-
-- device listing / connect / disconnect
-- tap / swipe / keyevent
-- text input (with safe escaping)
-- screenshots
-- dump-ui (UI hierarchy inspection)
-
-If the script is insufficient, fall back to raw `adb` commands from the reference.

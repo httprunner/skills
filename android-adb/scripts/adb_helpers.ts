@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import chalk from "chalk";
 import { Command } from "commander";
 
 const defaultTimeoutMs = 10_000;
+const defaultInstallSmartPrompt = "处理安装APK时的系统安全提示，优先点击继续安装/安装/允许/继续/确定，直到安装完成。";
+const defaultInstallSmartMaxUiSteps = 20;
+const defaultInstallSmartUiIntervalSec = 2;
+const defaultInstallSmartInitialWaitSec = 5;
 
 type LogLevel = "debug" | "info" | "error";
 
@@ -76,10 +81,11 @@ function adbPrefix(serial: string) {
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
-function runCmd(cmd: string[], capture: boolean, timeoutMs: number): CmdResult {
+function runCmd(cmd: string[], capture: boolean, timeoutMs: number, cwd?: string): CmdResult {
   const res = spawnSync(cmd[0], cmd.slice(1), {
     encoding: "utf8",
     timeout: timeoutMs > 0 ? timeoutMs : defaultTimeoutMs,
+    ...(cwd ? { cwd } : {}),
     stdio: capture ? "pipe" : "inherit",
   });
   if (res.error) {
@@ -98,9 +104,19 @@ function runAdb(serial: string, capture: boolean, args: string[]): CmdResult {
   return runCmd(cmd, capture, defaultTimeoutMs);
 }
 
+function writeCapturedOutput(stdout: string, stderr: string) {
+  if (stdout.trim()) process.stdout.write(stdout);
+  if (stderr.trim()) process.stderr.write(stderr);
+}
+
 function sleepMs(ms: number) {
   if (ms <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function sleepAsync(ms: number) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 function randomDelayMs(minMs: number, maxMs: number) {
@@ -360,8 +376,9 @@ function cmdLaunch(serial: string, args: string[]) {
     case "uri":
       result = runAdb(serial, true, ["shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", launch.uri ?? ""]);
       if (result.exitCode !== 0) return result.exitCode;
-      if (detectAmStartError(result.stdout + result.stderr)) {
-        logger.error("am start uri failed", { err: (detectAmStartError(result.stdout + result.stderr) as Error).message });
+      const uriError = detectAmStartError(result.stdout + result.stderr);
+      if (uriError) {
+        logger.error("am start uri failed", { err: uriError.message });
         return 1;
       }
       break;
@@ -369,8 +386,9 @@ function cmdLaunch(serial: string, args: string[]) {
       const component = `${launch.packageName}/${launch.activity}`;
       result = runAdb(serial, true, ["shell", "am", "start", "-W", "-n", component]);
       if (result.exitCode !== 0) return result.exitCode;
-      if (detectAmStartError(result.stdout + result.stderr)) {
-        logger.error("am start activity failed", { err: (detectAmStartError(result.stdout + result.stderr) as Error).message });
+      const activityError = detectAmStartError(result.stdout + result.stderr);
+      if (activityError) {
+        logger.error("am start activity failed", { err: activityError.message });
         return 1;
       }
       break;
@@ -564,6 +582,192 @@ function cmdWmSize(serial: string) {
   return runAdb(serial, false, ["shell", "wm", "size"]).exitCode;
 }
 
+function listOnlineDeviceSerials() {
+  const result = runCmd(["adb", "devices", "-l"], true, defaultTimeoutMs);
+  if (result.exitCode !== 0) {
+    logger.error("failed to list adb devices", { stderr: result.stderr.trim() });
+    return null;
+  }
+  const serials: string[] = [];
+  for (const rawLine of result.stdout.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("List of devices attached")) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) continue;
+    if (parts[1] !== "device") continue;
+    serials.push(parts[0]);
+  }
+  return serials;
+}
+
+function parseInstallPlanClick(stdout: string) {
+  try {
+    const data = JSON.parse(stdout);
+    const first = Array.isArray(data?.actions) ? data.actions[0] : null;
+    if (first?.action === "click" && Number.isFinite(first.x) && Number.isFinite(first.y)) {
+      return { x: Math.round(first.x), y: Math.round(first.y) };
+    }
+  } catch {
+    // ignore planner output that is not valid JSON
+  }
+  return null;
+}
+
+function findAiVisionSkillDir() {
+  const candidates = [
+    path.resolve(process.cwd(), "../ai-vision"),
+    path.resolve(process.cwd(), "ai-vision"),
+    path.resolve(__dirname, "../../ai-vision"),
+  ];
+  const dir = candidates.find((candidate) => fs.existsSync(path.join(candidate, "scripts", "ai_vision.ts"))) || "";
+  return { dir, candidates };
+}
+
+function hasInstallSmartEnv() {
+  return Boolean(process.env.ARK_BASE_URL && process.env.ARK_API_KEY);
+}
+
+function parseNumberOption(raw: string | undefined, fallback: number, name: string, validator: (value: number) => boolean) {
+  const value = Number(raw ?? String(fallback));
+  if (!Number.isFinite(value) || !validator(value)) {
+    logger.error(`invalid ${name}`, { value: raw });
+    return null;
+  }
+  return value;
+}
+
+async function cmdInstallSmart(
+  serial: string,
+  apkPath: string,
+  options: {
+    maxUiSteps: number;
+    uiIntervalSec: number;
+    initialWaitSec: number;
+    prompt: string;
+  },
+) {
+  let resolvedSerial = serial;
+  if (!resolvedSerial) {
+    const onlineSerials = listOnlineDeviceSerials();
+    if (!onlineSerials) return 1;
+    if (onlineSerials.length === 1) {
+      resolvedSerial = onlineSerials[0];
+      logger.info("use the only connected device", { serial: resolvedSerial });
+    } else if (onlineSerials.length === 0) {
+      logger.error("install-smart found no online adb device; connect one or pass -s/--serial");
+      return 2;
+    } else {
+      logger.error("install-smart found multiple online devices; pass -s/--serial", { devices: onlineSerials });
+      return 2;
+    }
+  }
+  if (!apkPath) {
+    logger.error("install-smart requires <apk>");
+    return 2;
+  }
+  const resolvedApk = path.resolve(apkPath);
+  if (!fs.existsSync(resolvedApk)) {
+    logger.error("apk not found", { apk: resolvedApk });
+    return 2;
+  }
+
+  const { dir: aiVisionDir, candidates: aiVisionDirCandidates } = findAiVisionSkillDir();
+  if (!aiVisionDir) {
+    logger.error("ai-vision skill directory not found", { tried: aiVisionDirCandidates });
+    return 2;
+  }
+  if (!hasInstallSmartEnv()) {
+    logger.error("missing ARK env vars", { required: "ARK_BASE_URL, ARK_API_KEY" });
+    return 2;
+  }
+
+  const screenshotDir = path.resolve(os.homedir(), ".eval", "screenshots");
+  fs.mkdirSync(screenshotDir, { recursive: true });
+
+  const adbCmd = [...adbPrefix(resolvedSerial), "install", "-r", resolvedApk];
+  logger.info("start install", { cmd: adbCmd.join(" ") });
+  const proc = spawn(adbCmd[0], adbCmd.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+
+  let stdout = "";
+  let stderr = "";
+  proc.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  proc.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  let exited = false;
+  let exitCode = 0;
+  const exitPromise = new Promise<number>((resolve) => {
+    proc.on("close", (code) => {
+      exited = true;
+      exitCode = typeof code === "number" ? code : 1;
+      resolve(exitCode);
+    });
+  });
+
+  const initialWaitMs = Math.max(0, Math.floor(options.initialWaitSec * 1000));
+  await Promise.race([exitPromise, sleepAsync(initialWaitMs)]);
+  if (exited) {
+    writeCapturedOutput(stdout, stderr);
+    return exitCode;
+  }
+
+  logger.info("install appears blocked, start UI assist loop", {
+    initial_wait_sec: options.initialWaitSec,
+    max_ui_steps: options.maxUiSteps,
+  });
+
+  const prompt = options.prompt || defaultInstallSmartPrompt;
+  const maxUiSteps = Math.max(1, Math.floor(options.maxUiSteps));
+  const uiIntervalMs = Math.max(0, Math.floor(options.uiIntervalSec * 1000));
+
+  for (let i = 1; i <= maxUiSteps; i++) {
+    if (exited) break;
+    const shot = path.resolve(
+      screenshotDir,
+      `install_${resolvedSerial}_${new Date().toISOString().replace(/[:.]/g, "-")}_${i}.png`,
+    );
+    const shotCode = cmdScreenshot(resolvedSerial, shot);
+    if (shotCode !== 0) {
+      logger.error("screenshot failed", { step: i });
+      await sleepAsync(uiIntervalMs);
+      continue;
+    }
+
+    const plan = runCmd(
+      ["npx", "tsx", "scripts/ai_vision.ts", "plan-next", "--screenshot", shot, "--prompt", prompt],
+      true,
+      120_000,
+      aiVisionDir,
+    );
+    if (plan.exitCode !== 0) {
+      logger.error("ai-vision plan-next failed", { step: i, stderr: plan.stderr.trim() });
+      await sleepAsync(uiIntervalMs);
+      continue;
+    }
+    const click = parseInstallPlanClick(plan.stdout);
+    if (click) {
+      logger.info("tap suggested point", { step: i, x: click.x, y: click.y });
+      cmdTap(resolvedSerial, [String(click.x), String(click.y)]);
+    } else {
+      logger.debug("no clickable action from ai-vision", { step: i });
+    }
+    await sleepAsync(uiIntervalMs);
+  }
+
+  if (!exited) {
+    logger.error("install still blocked after max ui steps");
+    proc.kill("SIGTERM");
+    await sleepAsync(500);
+    if (!exited) proc.kill("SIGKILL");
+  }
+  await exitPromise;
+  writeCapturedOutput(stdout, stderr);
+  return exitCode;
+}
+
 function getGlobalOptions(program: Command) {
   const opts = program.opts<{ logJson?: boolean; serial?: string }>();
   setLoggerJSON(Boolean(opts.logJson));
@@ -739,6 +943,40 @@ async function main() {
     .option("--parse", "parse UI hierarchy")
     .action((options: { out?: string; parse?: boolean }) => {
       process.exit(cmdDumpUI(getSerial(), String(options.out || ""), Boolean(options.parse)));
+    });
+  program
+    .command("install-smart")
+    .description("Install APK with 5s blocking check and AI-assisted UI handling")
+    .argument("<apk>", "apk path")
+    .option("--max-ui-steps <n>", "max UI assist steps", String(defaultInstallSmartMaxUiSteps))
+    .option("--ui-interval-sec <sec>", "seconds between UI iterations", String(defaultInstallSmartUiIntervalSec))
+    .option("--initial-wait-sec <sec>", "initial wait for install completion", String(defaultInstallSmartInitialWaitSec))
+    .option(
+      "--prompt <text>",
+      "custom ai-vision prompt",
+      defaultInstallSmartPrompt,
+    )
+    .action(async (apk: string, options: { maxUiSteps?: string; uiIntervalSec?: string; initialWaitSec?: string; prompt?: string }) => {
+      const maxUiSteps = parseNumberOption(options.maxUiSteps, defaultInstallSmartMaxUiSteps, "--max-ui-steps", (v) => v > 0);
+      if (maxUiSteps === null) {
+        process.exit(2);
+      }
+      const uiIntervalSec = parseNumberOption(options.uiIntervalSec, defaultInstallSmartUiIntervalSec, "--ui-interval-sec", (v) => v >= 0);
+      if (uiIntervalSec === null) {
+        process.exit(2);
+      }
+      const initialWaitSec = parseNumberOption(options.initialWaitSec, defaultInstallSmartInitialWaitSec, "--initial-wait-sec", (v) => v >= 0);
+      if (initialWaitSec === null) {
+        process.exit(2);
+      }
+      process.exit(
+        await cmdInstallSmart(getSerial(), apk, {
+          maxUiSteps,
+          uiIntervalSec,
+          initialWaitSec,
+          prompt: options.prompt ?? "",
+        }),
+      );
     });
   program
     .command("wm-size")
