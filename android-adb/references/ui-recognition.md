@@ -26,7 +26,7 @@ Use this flow as the default UI recognition path. Use `dump-ui --parse` only as 
 # Run in android-adb skill directory:
 mkdir -p ~/.eval/screenshots
 SHOT=~/.eval/screenshots/ui_$(date +"%Y%m%d_%H%M%S").png
-npx tsx scripts/adb_helpers.ts -s SERIAL screenshot -out "$SHOT"
+npx tsx scripts/adb_helpers.ts -s SERIAL screenshot --out "$SHOT"
 
 # Run in ai-vision skill directory:
 npx tsx scripts/ai_vision.ts query \

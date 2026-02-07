@@ -7,7 +7,10 @@ import chalk from "chalk";
 import { Command } from "commander";
 
 const defaultTimeoutMs = 10_000;
-const defaultInstallSmartPrompt = "处理安装APK时的系统安全提示，优先点击继续安装/安装/允许/继续/确定，直到安装完成。";
+const defaultHandleVerificationPrompt =
+  "处理系统安全验证页面。目标是仅完成当前验证挑战，不执行与验证无关的业务操作。安全验证可能是滑块、点选图片、按钮确认、验证码确认等形式。每次只返回一个最小必要动作（click/drag/long_press/press_back/wait/finished）。如果无法确定可执行动作，优先返回 wait。";
+const defaultInstallSmartPrompt =
+  "处理安装APK时的系统安全提示。严格遵守：1) 严禁点击“安装新版本”；2) 优先完成当前版本安装，若看到“已知悉该应用存在风险”或类似勾选框，先勾选，再点“继续安装”；3) 若出现安全验证（可能是滑块、点击图片、按钮确认等任意形式），根据界面选择最合适的单步动作（click/drag/long_press/press_back/wait 等）推进验证；4) 每次只返回一个推进安装的动作。";
 const defaultInstallSmartMaxUiSteps = 20;
 const defaultInstallSmartUiIntervalSec = 2;
 const defaultInstallSmartInitialWaitSec = 5;
@@ -68,11 +71,17 @@ function createLogger(json: boolean, level: LogLevel, stream: NodeJS.WriteStream
   };
 }
 
-let logger = createLogger(false, "debug", process.stderr, Boolean(process.stderr.isTTY));
+let logger = createLogger(false, "info", process.stderr, Boolean(process.stderr.isTTY));
 
-function setLoggerJSON(enabled: boolean) {
+function parseLogLevel(raw: string | undefined): LogLevel {
+  const lv = String(raw || "info").toLowerCase();
+  if (lv === "debug" || lv === "error" || lv === "info") return lv;
+  return "info";
+}
+
+function setLoggerConfig(enabled: boolean, level: LogLevel) {
   const useColor = Boolean(process.stderr.isTTY) && !enabled;
-  logger = createLogger(enabled, "debug", process.stderr, useColor);
+  logger = createLogger(enabled, level, process.stderr, useColor);
 }
 
 function adbPrefix(serial: string) {
@@ -337,7 +346,10 @@ function cmdScreenshot(serial: string, outPath: string) {
   }
   try {
     const cmd = [...adbPrefix(serial), "exec-out", "screencap", "-p"];
-    const res = spawnSync(cmd[0], cmd.slice(1), { timeout: defaultTimeoutMs });
+    const res = spawnSync(cmd[0], cmd.slice(1), {
+      timeout: defaultTimeoutMs,
+      maxBuffer: 20 * 1024 * 1024,
+    });
     if (res.error) {
       if ((res.error as any).code === "ETIMEDOUT") {
         logger.error("adb command timed out");
@@ -600,17 +612,116 @@ function listOnlineDeviceSerials() {
   return serials;
 }
 
-function parseInstallPlanClick(stdout: string) {
+type PlanNextAction =
+  | { kind: "click"; x: number; y: number }
+  | { kind: "drag"; x1: number; y1: number; x2: number; y2: number }
+  | { kind: "long_press"; x: number; y: number }
+  | { kind: "press_back" }
+  | { kind: "wait" }
+  | { kind: "finished" };
+
+function parsePlanNextAction(first: any): PlanNextAction | null {
+  if (!first || typeof first !== "object") return null;
+  switch (first.action) {
+    case "click":
+      return Number.isFinite(first.x) && Number.isFinite(first.y)
+        ? { kind: "click", x: Math.round(first.x), y: Math.round(first.y) }
+        : null;
+    case "drag":
+      return Number.isFinite(first.x) && Number.isFinite(first.y) && Number.isFinite(first.to_x) && Number.isFinite(first.to_y)
+        ? {
+            kind: "drag",
+            x1: Math.round(first.x),
+            y1: Math.round(first.y),
+            x2: Math.round(first.to_x),
+            y2: Math.round(first.to_y),
+          }
+        : null;
+    case "long_press":
+      return Number.isFinite(first.x) && Number.isFinite(first.y)
+        ? { kind: "long_press", x: Math.round(first.x), y: Math.round(first.y) }
+        : null;
+    case "press_back":
+      return { kind: "press_back" };
+    case "wait":
+      return { kind: "wait" };
+    case "finished":
+      return { kind: "finished" };
+    default:
+      return null;
+  }
+}
+
+function parsePlanNextOutput(stdout: string): { action: PlanNextAction | null; thought: string } {
   try {
     const data = JSON.parse(stdout);
-    const first = Array.isArray(data?.actions) ? data.actions[0] : null;
-    if (first?.action === "click" && Number.isFinite(first.x) && Number.isFinite(first.y)) {
-      return { x: Math.round(first.x), y: Math.round(first.y) };
-    }
+    return {
+      action: parsePlanNextAction(Array.isArray(data?.actions) ? data.actions[0] : null),
+      thought: typeof data?.thought === "string" ? data.thought : "",
+    };
   } catch {
-    // ignore planner output that is not valid JSON
+    return { action: null, thought: "" };
   }
-  return null;
+}
+
+function isLikelyVerificationDone(thought: string) {
+  const t = thought || "";
+  const doneKeywords = ["完成当前验证", "验证完成", "安装完成", "点击该按钮即可完成", "已完成"];
+  return doneKeywords.some((k) => t.includes(k));
+}
+
+function shouldStopAfterWait(thought: string, consecutiveWaits: number) {
+  if (consecutiveWaits >= 2) return true;
+  const t = thought || "";
+  const noSecurityKeywords = [
+    "未出现系统安全验证",
+    "未出现安全验证",
+    "无法确定可执行动作",
+    "应用商店",
+    "搜索界面",
+    "非系统安全验证",
+    "未显示系统安全验证相关",
+  ];
+  return noSecurityKeywords.some((k) => t.includes(k));
+}
+
+function shouldStopVerification(action: PlanNextAction, thought: string, consecutiveWaits: number) {
+  if (action.kind === "finished") return { stop: true, reason: "planner finished" };
+  if (action.kind === "wait" && shouldStopAfterWait(thought, consecutiveWaits)) {
+    return { stop: true, reason: "wait heuristic" };
+  }
+  if (action.kind !== "wait" && isLikelyVerificationDone(thought)) {
+    return { stop: true, reason: "completion heuristic" };
+  }
+  return { stop: false, reason: "" };
+}
+
+function executePlanNextAction(serial: string, action: PlanNextAction, step: number, uiIntervalMs: number) {
+  if (action.kind === "click") {
+    logger.info("tap suggested point", { step, x: action.x, y: action.y });
+    cmdTap(serial, [String(action.x), String(action.y)]);
+    return;
+  }
+  if (action.kind === "drag") {
+    logger.info("drag suggested path", { step, x1: action.x1, y1: action.y1, x2: action.x2, y2: action.y2 });
+    logger.debug("execute drag via adb swipe", { step, duration_ms: 900 });
+    cmdSwipe(serial, [String(action.x1), String(action.y1), String(action.x2), String(action.y2)], 900);
+    return;
+  }
+  if (action.kind === "long_press") {
+    logger.info("long-press suggested point", { step, x: action.x, y: action.y });
+    cmdLongPress(serial, [String(action.x), String(action.y)], 1200);
+    return;
+  }
+  if (action.kind === "press_back") {
+    logger.info("execute press_back", { step });
+    cmdKeyEvent(serial, ["KEYCODE_BACK"]);
+    return;
+  }
+  if (action.kind === "wait") {
+    logger.info("execute wait", { step, ms: uiIntervalMs });
+    return;
+  }
 }
 
 function findAiVisionSkillDir() {
@@ -636,6 +747,109 @@ function parseNumberOption(raw: string | undefined, fallback: number, name: stri
   return value;
 }
 
+function resolveDeviceSerial(serial: string, command: string) {
+  if (serial) return serial;
+  const onlineSerials = listOnlineDeviceSerials();
+  if (!onlineSerials) return "";
+  if (onlineSerials.length === 1) {
+    logger.info("use the only connected device", { serial: onlineSerials[0], command });
+    return onlineSerials[0];
+  }
+  if (onlineSerials.length === 0) {
+    logger.error(`${command} found no online adb device; connect one or pass -s/--serial`);
+    return "";
+  }
+  logger.error(`${command} found multiple online devices; pass -s/--serial`, { devices: onlineSerials });
+  return "";
+}
+
+function getAiVisionDir() {
+  const { dir: aiVisionDir, candidates: aiVisionDirCandidates } = findAiVisionSkillDir();
+  if (!aiVisionDir) {
+    logger.error("ai-vision skill directory not found", { tried: aiVisionDirCandidates });
+    return "";
+  }
+  return aiVisionDir;
+}
+
+async function cmdHandleVerification(
+  serial: string,
+  options: {
+    maxUiSteps: number;
+    uiIntervalSec: number;
+    prompt: string;
+    screenshotTag: string;
+  },
+) {
+  const resolvedSerial = resolveDeviceSerial(serial, "handle-verification");
+  if (!resolvedSerial) return 2;
+
+  const aiVisionDir = getAiVisionDir();
+  if (!aiVisionDir) return 2;
+  if (!hasInstallSmartEnv()) {
+    logger.error("missing ARK env vars", { required: "ARK_BASE_URL, ARK_API_KEY" });
+    return 2;
+  }
+
+  const screenshotDir = path.resolve(os.homedir(), ".eval", "screenshots");
+  fs.mkdirSync(screenshotDir, { recursive: true });
+
+  const prompt = options.prompt || defaultHandleVerificationPrompt;
+  const maxUiSteps = Math.max(1, Math.floor(options.maxUiSteps));
+  const uiIntervalMs = Math.max(0, Math.floor(options.uiIntervalSec * 1000));
+  const screenshotTag = (options.screenshotTag || "security").replace(/[^a-zA-Z0-9_-]/g, "_");
+  let consecutiveWaits = 0;
+
+  for (let i = 1; i <= maxUiSteps; i++) {
+    const shot = path.resolve(
+      screenshotDir,
+      `${screenshotTag}_${resolvedSerial}_${new Date().toISOString().replace(/[:.]/g, "-")}_${i}.png`,
+    );
+    const shotCode = cmdScreenshot(resolvedSerial, shot);
+    if (shotCode !== 0) {
+      logger.error("screenshot failed", { step: i });
+      await sleepAsync(uiIntervalMs);
+      continue;
+    }
+    const aiVisionCmd = ["npx", "tsx", "scripts/ai_vision.ts", "plan-next", "--screenshot", shot, "--prompt", prompt];
+    const plan = runCmd(
+      aiVisionCmd,
+      true,
+      120_000,
+      aiVisionDir,
+    );
+    if (plan.exitCode !== 0) {
+      logger.error("ai-vision plan-next failed", { step: i, stderr: plan.stderr.trim() });
+      await sleepAsync(uiIntervalMs);
+      continue;
+    }
+    const parsed = parsePlanNextOutput(plan.stdout);
+    if (parsed.thought) logger.debug("ai-vision thought", { step: i, thought: parsed.thought });
+    const action = parsed.action;
+    if (!action) {
+      logger.debug("no recognized action from ai-vision", { step: i });
+      await sleepAsync(uiIntervalMs);
+      continue;
+    }
+    logger.debug("ai-vision action", { step: i, action: action.kind });
+    if (action.kind === "wait") {
+      consecutiveWaits += 1;
+    } else {
+      consecutiveWaits = 0;
+    }
+    const stop = shouldStopVerification(action, parsed.thought, consecutiveWaits);
+    if (stop.stop) {
+      logger.info("stop verification", { step: i, reason: stop.reason, consecutive_waits: consecutiveWaits });
+      return 0;
+    }
+    executePlanNextAction(resolvedSerial, action, i, uiIntervalMs);
+    await sleepAsync(uiIntervalMs);
+  }
+
+  logger.error("security-check not solved after max ui steps", { max_ui_steps: maxUiSteps });
+  return 1;
+}
+
 async function cmdInstallSmart(
   serial: string,
   apkPath: string,
@@ -646,21 +860,8 @@ async function cmdInstallSmart(
     prompt: string;
   },
 ) {
-  let resolvedSerial = serial;
-  if (!resolvedSerial) {
-    const onlineSerials = listOnlineDeviceSerials();
-    if (!onlineSerials) return 1;
-    if (onlineSerials.length === 1) {
-      resolvedSerial = onlineSerials[0];
-      logger.info("use the only connected device", { serial: resolvedSerial });
-    } else if (onlineSerials.length === 0) {
-      logger.error("install-smart found no online adb device; connect one or pass -s/--serial");
-      return 2;
-    } else {
-      logger.error("install-smart found multiple online devices; pass -s/--serial", { devices: onlineSerials });
-      return 2;
-    }
-  }
+  const resolvedSerial = resolveDeviceSerial(serial, "install-smart");
+  if (!resolvedSerial) return 2;
   if (!apkPath) {
     logger.error("install-smart requires <apk>");
     return 2;
@@ -670,19 +871,6 @@ async function cmdInstallSmart(
     logger.error("apk not found", { apk: resolvedApk });
     return 2;
   }
-
-  const { dir: aiVisionDir, candidates: aiVisionDirCandidates } = findAiVisionSkillDir();
-  if (!aiVisionDir) {
-    logger.error("ai-vision skill directory not found", { tried: aiVisionDirCandidates });
-    return 2;
-  }
-  if (!hasInstallSmartEnv()) {
-    logger.error("missing ARK env vars", { required: "ARK_BASE_URL, ARK_API_KEY" });
-    return 2;
-  }
-
-  const screenshotDir = path.resolve(os.homedir(), ".eval", "screenshots");
-  fs.mkdirSync(screenshotDir, { recursive: true });
 
   const adbCmd = [...adbPrefix(resolvedSerial), "install", "-r", resolvedApk];
   logger.info("start install", { cmd: adbCmd.join(" ") });
@@ -714,47 +902,19 @@ async function cmdInstallSmart(
     return exitCode;
   }
 
-  logger.info("install appears blocked, start UI assist loop", {
+  logger.info("install appears blocked, invoke handle-verification", {
     initial_wait_sec: options.initialWaitSec,
     max_ui_steps: options.maxUiSteps,
   });
 
-  const prompt = options.prompt || defaultInstallSmartPrompt;
-  const maxUiSteps = Math.max(1, Math.floor(options.maxUiSteps));
-  const uiIntervalMs = Math.max(0, Math.floor(options.uiIntervalSec * 1000));
-
-  for (let i = 1; i <= maxUiSteps; i++) {
-    if (exited) break;
-    const shot = path.resolve(
-      screenshotDir,
-      `install_${resolvedSerial}_${new Date().toISOString().replace(/[:.]/g, "-")}_${i}.png`,
-    );
-    const shotCode = cmdScreenshot(resolvedSerial, shot);
-    if (shotCode !== 0) {
-      logger.error("screenshot failed", { step: i });
-      await sleepAsync(uiIntervalMs);
-      continue;
-    }
-
-    const plan = runCmd(
-      ["npx", "tsx", "scripts/ai_vision.ts", "plan-next", "--screenshot", shot, "--prompt", prompt],
-      true,
-      120_000,
-      aiVisionDir,
-    );
-    if (plan.exitCode !== 0) {
-      logger.error("ai-vision plan-next failed", { step: i, stderr: plan.stderr.trim() });
-      await sleepAsync(uiIntervalMs);
-      continue;
-    }
-    const click = parseInstallPlanClick(plan.stdout);
-    if (click) {
-      logger.info("tap suggested point", { step: i, x: click.x, y: click.y });
-      cmdTap(resolvedSerial, [String(click.x), String(click.y)]);
-    } else {
-      logger.debug("no clickable action from ai-vision", { step: i });
-    }
-    await sleepAsync(uiIntervalMs);
+  const solveCode = await cmdHandleVerification(resolvedSerial, {
+    maxUiSteps: options.maxUiSteps,
+    uiIntervalSec: options.uiIntervalSec,
+    prompt: options.prompt || defaultInstallSmartPrompt,
+    screenshotTag: "install",
+  });
+  if (solveCode !== 0 && !exited) {
+    logger.error("handle-verification returned non-zero while install still running", { code: solveCode });
   }
 
   if (!exited) {
@@ -769,8 +929,9 @@ async function cmdInstallSmart(
 }
 
 function getGlobalOptions(program: Command) {
-  const opts = program.opts<{ logJson?: boolean; serial?: string }>();
-  setLoggerJSON(Boolean(opts.logJson));
+  const opts = program.opts<{ logJson?: boolean; serial?: string; logLevel?: string }>();
+  const level = parseLogLevel(opts.logLevel);
+  setLoggerConfig(Boolean(opts.logJson), level);
   return { serial: String(opts.serial || "") };
 }
 
@@ -783,9 +944,15 @@ async function main() {
     .showHelpAfterError()
     .showSuggestionAfterError()
     .option("--log-json", "Output logs in JSON")
+    .option("--log-level <level>", "log verbosity: debug|info|error", "info")
     .option("-s, --serial <id>", "device serial");
 
   const getSerial = () => getGlobalOptions(program).serial;
+  const applyCommandLogLevel = (raw: string | undefined) => {
+    if (!raw) return;
+    const root = program.opts<{ logJson?: boolean }>();
+    setLoggerConfig(Boolean(root.logJson), parseLogLevel(raw));
+  };
 
   program
     .command("devices")
@@ -945,18 +1112,46 @@ async function main() {
       process.exit(cmdDumpUI(getSerial(), String(options.out || ""), Boolean(options.parse)));
     });
   program
+    .command("handle-verification")
+    .description("Use ai-vision plan-next loop to solve security verification and dialogs")
+    .option("--max-ui-steps <n>", "max UI assist steps", String(defaultInstallSmartMaxUiSteps))
+    .option("--ui-interval-sec <sec>", "seconds between UI iterations", String(defaultInstallSmartUiIntervalSec))
+    .option("--log-level <level>", "override log level: debug|info|error")
+    .option("--prompt <text>", "custom ai-vision prompt", defaultHandleVerificationPrompt)
+    .action(async (options: { maxUiSteps?: string; uiIntervalSec?: string; logLevel?: string; prompt?: string }) => {
+      applyCommandLogLevel(options.logLevel);
+      const maxUiSteps = parseNumberOption(options.maxUiSteps, defaultInstallSmartMaxUiSteps, "--max-ui-steps", (v) => v > 0);
+      if (maxUiSteps === null) {
+        process.exit(2);
+      }
+      const uiIntervalSec = parseNumberOption(options.uiIntervalSec, defaultInstallSmartUiIntervalSec, "--ui-interval-sec", (v) => v >= 0);
+      if (uiIntervalSec === null) {
+        process.exit(2);
+      }
+      process.exit(
+        await cmdHandleVerification(getSerial(), {
+          maxUiSteps,
+          uiIntervalSec,
+          prompt: options.prompt ?? "",
+          screenshotTag: "security",
+        }),
+      );
+    });
+  program
     .command("install-smart")
-    .description("Install APK with 5s blocking check and AI-assisted UI handling")
+    .description("Install APK with 5s blocking check, then delegate dialogs to handle-verification")
     .argument("<apk>", "apk path")
     .option("--max-ui-steps <n>", "max UI assist steps", String(defaultInstallSmartMaxUiSteps))
     .option("--ui-interval-sec <sec>", "seconds between UI iterations", String(defaultInstallSmartUiIntervalSec))
     .option("--initial-wait-sec <sec>", "initial wait for install completion", String(defaultInstallSmartInitialWaitSec))
+    .option("--log-level <level>", "override log level: debug|info|error")
     .option(
       "--prompt <text>",
       "custom ai-vision prompt",
       defaultInstallSmartPrompt,
     )
-    .action(async (apk: string, options: { maxUiSteps?: string; uiIntervalSec?: string; initialWaitSec?: string; prompt?: string }) => {
+    .action(async (apk: string, options: { maxUiSteps?: string; uiIntervalSec?: string; initialWaitSec?: string; logLevel?: string; prompt?: string }) => {
+      applyCommandLogLevel(options.logLevel);
       const maxUiSteps = parseNumberOption(options.maxUiSteps, defaultInstallSmartMaxUiSteps, "--max-ui-steps", (v) => v > 0);
       if (maxUiSteps === null) {
         process.exit(2);

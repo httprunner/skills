@@ -48,11 +48,13 @@ Run commands from `android-adb` skill directory.
 
 ## Screenshot And UI Tree
 
-- Screenshot: `npx tsx scripts/adb_helpers.ts -s SERIAL screenshot -out "<path>/shot.png"`
+- Screenshot: `npx tsx scripts/adb_helpers.ts -s SERIAL screenshot --out "<path>/shot.png"`
 - Dump UI XML: `npx tsx scripts/adb_helpers.ts -s SERIAL dump-ui [--out path]`
 - Dump + parse clickable/input nodes: `npx tsx scripts/adb_helpers.ts -s SERIAL dump-ui --parse`
 
 ## Installer Automation
 
+- Handle verification/dialogs only: `npx tsx scripts/adb_helpers.ts -s SERIAL handle-verification`
 - Handle install dialogs automatically: `npx tsx scripts/adb_helpers.ts -s SERIAL install-smart /path/to/app.apk`
-- Detailed options and behavior: see `install-smart.md`
+- `handle-verification` detailed options and behavior: see `handle-verification.md`
+- `install-smart` detailed options and behavior: see `install-smart.md`

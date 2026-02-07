@@ -30,6 +30,7 @@ Execute Android operations with `scripts/adb_helpers.ts` in the `android-adb` sk
 - Command catalog and examples: `references/adb-reference.md`
 - Vision-first UI recognition flow: `references/ui-recognition.md`
 - Installer dialog handling details: `references/install-smart.md`
+- Generic verification handling: `references/handle-verification.md`
 
 Load only the file needed for the current task.
 
@@ -39,5 +40,5 @@ Load only the file needed for the current task.
 npx tsx scripts/adb_helpers.ts --help
 npx tsx scripts/adb_helpers.ts devices
 npx tsx scripts/adb_helpers.ts -s SERIAL wm-size
-npx tsx scripts/adb_helpers.ts -s SERIAL screenshot -out ~/.eval/screenshots/shot.png
+npx tsx scripts/adb_helpers.ts -s SERIAL screenshot --out ~/.eval/screenshots/shot.png
 ```
