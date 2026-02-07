@@ -1,3 +1,0 @@
-interface:
-  display_name: "Android Device Reset"
-  short_description: "Run Android reset command sequence via ADB"

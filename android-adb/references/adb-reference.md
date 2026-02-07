@@ -58,3 +58,7 @@ Run commands from `android-adb` skill directory.
 - Handle install dialogs automatically: `npx tsx scripts/adb_helpers.ts -s SERIAL install-smart /path/to/app.apk`
 - `handle-verification` detailed options and behavior: see `handle-verification.md`
 - `install-smart` detailed options and behavior: see `install-smart.md`
+
+## Reset Workflow
+
+- Device reset steps and alias mapping: see `device-reset.md`

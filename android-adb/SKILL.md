@@ -1,6 +1,6 @@
 ---
 name: android-adb
-description: Android device control and UI automation via ADB using a TypeScript helper CLI. Use for device/emulator discovery, USB or Wi-Fi connection, app launch/force-stop, tap/swipe/keyevent/text input, screenshots, APK install handling, and ADB troubleshooting. Use with ai-vision for screenshot-based UI recognition and coordinate decisions.
+description: Android device control and UI automation via ADB using a TypeScript helper CLI. Use for device/emulator discovery, USB or Wi-Fi connection, app launch/force-stop, tap/swipe/keyevent/text input, screenshots, APK install handling, device reset for app, and ADB troubleshooting. Use with ai-vision for screenshot-based UI recognition and coordinate decisions.
 ---
 
 # Android ADB Automation
@@ -14,6 +14,7 @@ Execute Android operations with `scripts/adb_helpers.ts` in the `android-adb` sk
 - Input primitives (`tap`, `swipe`, `long-press`, `keyevent`, `text`).
 - Screenshot and UI dump utilities (`screenshot`, `dump-ui --parse`).
 - Install automation with UI assistance (`install-smart`).
+- Device reset workflow for app (`device-reset`).
 
 ## Execution Constraints
 
@@ -31,6 +32,7 @@ Execute Android operations with `scripts/adb_helpers.ts` in the `android-adb` sk
 - Vision-first UI recognition flow: `references/ui-recognition.md`
 - Installer dialog handling details: `references/install-smart.md`
 - Generic verification handling: `references/handle-verification.md`
+- Device reset flow for app: `references/device-reset.md`
 
 Load only the file needed for the current task.
 
