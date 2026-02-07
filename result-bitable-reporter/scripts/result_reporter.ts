@@ -263,7 +263,7 @@ function applyWhereArgs(whereExpr: string, args: string[]): string {
   return out;
 }
 
-function buildWhereClause(opts: FilterOptions): string {
+function buildWhereClause(opts: FilterOptions, extraClauses: string[] = []): string {
   const clauses: string[] = [];
 
   if (opts.status.length > 0) {
@@ -294,6 +294,7 @@ function buildWhereClause(opts: FilterOptions): string {
   if (opts.where) {
     clauses.push(`(${applyWhereArgs(opts.where, opts.whereArgs)})`);
   }
+  clauses.push(...extraClauses);
 
   return clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
 }
@@ -316,8 +317,13 @@ function runSQLiteJSON<T>(dbPath: string, sql: string): T {
 }
 
 function fetchRows(opts: FilterOptions): CaptureRow[] {
+  return fetchRowsPage(opts, opts.limit, 0);
+}
+
+function fetchRowsPage(opts: FilterOptions, limit: number, afterID: number): CaptureRow[] {
   const table = quoteIdent(opts.table);
-  const whereSQL = buildWhereClause(opts);
+  const extraClauses = afterID > 0 ? [`id > ${afterID}`] : [];
+  const whereSQL = buildWhereClause(opts, extraClauses);
   const sql = `
 SELECT id, Datetime, DeviceSerial, App, Scene, Params, ItemID, ItemCaption,
        ItemCDNURL, ItemURL, ItemDuration, UserName, UserID, UserAlias,
@@ -327,7 +333,7 @@ SELECT id, Datetime, DeviceSerial, App, Scene, Params, ItemID, ItemCaption,
 FROM ${table}
 ${whereSQL}
 ORDER BY id ASC
-LIMIT ${opts.limit};`;
+LIMIT ${limit};`;
   return runSQLiteJSON<CaptureRow[]>(opts.dbPath, sql);
 }
 
@@ -572,7 +578,7 @@ function hasArtifactDeltaSince(dir: string, sinceMs: number): boolean {
   return false;
 }
 
-function countJSONLLinesSince(dir: string, sinceMs: number): number {
+function countJSONLLinesSince(dir: string, sinceMs: number, suffix?: string): number {
   if (!existsSync(dir)) {
     return 0;
   }
@@ -588,6 +594,9 @@ function countJSONLLinesSince(dir: string, sinceMs: number): number {
         continue;
       }
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      if (suffix && !entry.name.endsWith(suffix)) {
         continue;
       }
       const st = statSync(fullPath);
@@ -1006,10 +1015,11 @@ program
     const countAfter = await waitForCountStable(state.dbPath, state.table);
     const delta = countAfter - state.countBefore;
     const taskDelta = countRowsByTaskAfterID(state.dbPath, state.table, state.taskID, state.maxIDBefore);
-    const jsonlLines = countJSONLLinesSince(state.artifactDir, state.startedAt);
+    const trackingEvents = countJSONLLinesSince(state.artifactDir, state.startedAt, "_track.jsonl");
+    const recordsJSONL = countJSONLLinesSince(state.artifactDir, state.startedAt, "_records.jsonl");
     const runtimeSec = Math.max(0, Math.round((Date.now() - state.startedAt) / 1000));
     process.stderr.write(
-      `[collect-stop] sqlite db=${state.dbPath} table=${state.table} before_count=${state.countBefore} after_count=${countAfter} delta=${delta} task_delta=${taskDelta} jsonl_lines=${jsonlLines} runtime_sec=${runtimeSec}\n`,
+      `[collect-stop] sqlite db=${state.dbPath} table=${state.table} before_count=${state.countBefore} after_count=${countAfter} delta=${delta} task_delta=${taskDelta} records_jsonl=${recordsJSONL} tracking_events=${trackingEvents} runtime_sec=${runtimeSec}\n`,
     );
 
     if (!hasArtifactDeltaSince(state.artifactDir, state.startedAt)) {
@@ -1057,7 +1067,7 @@ program
   .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
   .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
   .option("--bitable-url <url>", "Result Bitable URL (default from RESULT_BITABLE_URL)")
-  .option("--limit <n>", "Maximum rows to fetch", "30")
+  .option("--limit <n>", "Page size per sqlite fetch (report loops until no rows)", "30")
   .option("--status <csv>", "Reported status list, comma-separated", "0,-1")
   .option("--task-id <value>", "Filter by exact TaskID (digits)")
   .option("--batch-size <n>", "Batch create size (max 500)", "30")
@@ -1083,58 +1093,77 @@ program
       dryRun: Boolean(cmd.dryRun),
     };
 
-    const rows = fetchRows(reportOpts);
+    if (!reportOpts.bitableURL && !reportOpts.dryRun) {
+      throw new Error("RESULT_BITABLE_URL or --bitable-url is required");
+    }
+
+    const pageSize = Math.max(reportOpts.batchSize, reportOpts.limit, 50);
+    let lastID = 0;
+    let selectedCount = 0;
+    let successCount = 0;
+    let failedCount = 0;
+
+    let accessToken = "";
+    let bitableRef: BitableRef | null = null;
+    if (!reportOpts.dryRun) {
+      accessToken = await getTenantAccessToken();
+      bitableRef = await resolveBitableRef(reportOpts.bitableURL as string, accessToken);
+    }
+
+    while (true) {
+      const rows = fetchRowsPage(reportOpts, pageSize, lastID);
+      if (rows.length === 0) {
+        break;
+      }
+      selectedCount += rows.length;
+      lastID = rows[rows.length - 1]?.id ?? lastID;
+
+      if (reportOpts.dryRun) {
+        for (const row of rows) {
+          process.stdout.write(`${JSON.stringify(row)}\n`);
+        }
+        continue;
+      }
+
+      const chunks = splitIntoChunks(rows, reportOpts.batchSize);
+      for (const chunk of chunks) {
+        const ids = chunk.map((row) => row.id);
+        try {
+          await createBitableRecordsBatch(accessToken, bitableRef as BitableRef, chunk);
+          markSuccessBatch(reportOpts.dbPath, reportOpts.table, ids);
+          successCount += ids.length;
+        } catch (err) {
+          const msg = truncateError(err);
+          process.stderr.write(`[report] batch failed size=${ids.length} error=${msg}; fallback to single rows\n`);
+          // Fallback to single-row uploads to reduce blast radius and surface bad rows.
+          for (const row of chunk) {
+            try {
+              await createBitableRecordSingle(accessToken, bitableRef as BitableRef, row);
+              markSuccessBatch(reportOpts.dbPath, reportOpts.table, [row.id]);
+              successCount += 1;
+            } catch (singleErr) {
+              const singleMsg = truncateError(singleErr);
+              markFailureBatch(reportOpts.dbPath, reportOpts.table, [row.id], singleMsg);
+              failedCount += 1;
+              process.stderr.write(`[report] row failed id=${row.id} error=${singleMsg}\n`);
+            }
+          }
+        }
+      }
+    }
+
     process.stderr.write(
-      `[report] db=${reportOpts.dbPath} table=${reportOpts.table} selected=${rows.length} limit=${reportOpts.limit}\n`,
+      `[report] db=${reportOpts.dbPath} table=${reportOpts.table} selected=${selectedCount} page_size=${pageSize}\n`,
     );
 
-    if (rows.length === 0) {
+    if (selectedCount === 0) {
       process.stderr.write("[report] no rows selected, exit\n");
       return;
     }
 
     if (reportOpts.dryRun) {
-      for (const row of rows) {
-        process.stdout.write(`${JSON.stringify(row)}\n`);
-      }
       process.stderr.write("[report] dry-run enabled, skipped Feishu upload and sqlite writeback\n");
       return;
-    }
-
-    if (!reportOpts.bitableURL) {
-      throw new Error("RESULT_BITABLE_URL or --bitable-url is required");
-    }
-
-    const accessToken = await getTenantAccessToken();
-    const bitableRef = await resolveBitableRef(reportOpts.bitableURL, accessToken);
-
-    const chunks = splitIntoChunks(rows, reportOpts.batchSize);
-    let successCount = 0;
-    let failedCount = 0;
-
-    for (const chunk of chunks) {
-      const ids = chunk.map((row) => row.id);
-      try {
-        await createBitableRecordsBatch(accessToken, bitableRef, chunk);
-        markSuccessBatch(reportOpts.dbPath, reportOpts.table, ids);
-        successCount += ids.length;
-      } catch (err) {
-        const msg = truncateError(err);
-        process.stderr.write(`[report] batch failed size=${ids.length} error=${msg}; fallback to single rows\n`);
-        // Fallback to single-row uploads to reduce blast radius and surface bad rows.
-        for (const row of chunk) {
-          try {
-            await createBitableRecordSingle(accessToken, bitableRef, row);
-            markSuccessBatch(reportOpts.dbPath, reportOpts.table, [row.id]);
-            successCount += 1;
-          } catch (singleErr) {
-            const singleMsg = truncateError(singleErr);
-            markFailureBatch(reportOpts.dbPath, reportOpts.table, [row.id], singleMsg);
-            failedCount += 1;
-            process.stderr.write(`[report] row failed id=${row.id} error=${singleMsg}\n`);
-          }
-        }
-      }
     }
 
     process.stderr.write(`[report] completed success=${successCount} failed=${failedCount}\n`);
