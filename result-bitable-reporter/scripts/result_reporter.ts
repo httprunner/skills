@@ -65,6 +65,7 @@ type ReportOptions = FilterOptions & {
   bitableURL?: string;
   batchSize: number;
   dryRun: boolean;
+  maxRows?: number;
 };
 
 type RetryResetOptions = {
@@ -143,6 +144,7 @@ type FeishuResp<T> = {
 const DEFAULT_DB_PATH = join(homedir(), ".eval", "records.sqlite");
 const DEFAULT_TABLE = "capture_results";
 const COLLECT_STATE_DIR = join(homedir(), ".eval", "collectors");
+const REPORT_PAGE_SIZE = 100;
 
 const program = new Command();
 program
@@ -1067,9 +1069,9 @@ program
   .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
   .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
   .option("--bitable-url <url>", "Result Bitable URL (default from RESULT_BITABLE_URL)")
-  .option("--limit <n>", "Page size per sqlite fetch (report loops until no rows)", "30")
   .option("--status <csv>", "Reported status list, comma-separated", "0,-1")
   .option("--task-id <value>", "Filter by exact TaskID (digits)")
+  .option("--max-rows <n>", "Maximum total rows to process in this report run")
   .option("--batch-size <n>", "Batch create size (max 500)", "30")
   .option("--dry-run", "Print selected rows only, skip Feishu and writeback", false)
   .option("--app <value>", "Exact App filter")
@@ -1091,13 +1093,17 @@ program
       bitableURL: cmd.bitableUrl?.trim() || process.env.RESULT_BITABLE_URL?.trim(),
       batchSize,
       dryRun: Boolean(cmd.dryRun),
+      maxRows: cmd.maxRows === undefined ? undefined : Number(cmd.maxRows),
     };
+    if (reportOpts.maxRows !== undefined && (!Number.isInteger(reportOpts.maxRows) || reportOpts.maxRows <= 0)) {
+      throw new Error(`invalid --max-rows: ${cmd.maxRows}; expected positive integer`);
+    }
 
     if (!reportOpts.bitableURL && !reportOpts.dryRun) {
       throw new Error("RESULT_BITABLE_URL or --bitable-url is required");
     }
 
-    const pageSize = Math.max(reportOpts.batchSize, reportOpts.limit, 50);
+    const pageSize = Math.max(reportOpts.batchSize, REPORT_PAGE_SIZE);
     let lastID = 0;
     let selectedCount = 0;
     let successCount = 0;
@@ -1111,7 +1117,15 @@ program
     }
 
     while (true) {
-      const rows = fetchRowsPage(reportOpts, pageSize, lastID);
+      if (reportOpts.maxRows !== undefined && selectedCount >= reportOpts.maxRows) {
+        break;
+      }
+      const currentLimit =
+        reportOpts.maxRows === undefined ? pageSize : Math.min(pageSize, reportOpts.maxRows - selectedCount);
+      if (currentLimit <= 0) {
+        break;
+      }
+      const rows = fetchRowsPage(reportOpts, currentLimit, lastID);
       if (rows.length === 0) {
         break;
       }
@@ -1153,7 +1167,7 @@ program
     }
 
     process.stderr.write(
-      `[report] db=${reportOpts.dbPath} table=${reportOpts.table} selected=${selectedCount} page_size=${pageSize}\n`,
+      `[report] db=${reportOpts.dbPath} table=${reportOpts.table} selected=${selectedCount} page_size=${pageSize} max_rows=${reportOpts.maxRows ?? "all"}\n`,
     );
 
     if (selectedCount === 0) {

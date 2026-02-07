@@ -96,7 +96,7 @@ npx tsx scripts/result_reporter.ts report \
   --task-id 20260206001 \
   --status 0,-1 \
   --batch-size 30 \
-  --limit 100
+  --max-rows 500
 ```
 
 Dry-run without Feishu write:
@@ -106,7 +106,7 @@ npx tsx scripts/result_reporter.ts report \
   --dry-run \
   --task-id 20260206001 \
   --status 0,-1 \
-  --limit 10
+  --max-rows 20
 ```
 
 Reset failed rows and retry:
@@ -120,5 +120,5 @@ npx tsx scripts/result_reporter.ts report \
   --task-id 20260206001 \
   --status 0,-1 \
   --batch-size 30 \
-  --limit 100
+  --max-rows 500
 ```

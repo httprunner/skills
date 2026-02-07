@@ -35,7 +35,9 @@ Default query picks rows where:
 
 - `reported IN (0, -1)`
 - Ordered by `id ASC`
-- Limited by `--limit` (default 30)
+- `filter`: limited by `--limit` (default 30)
+- `report`: uses fixed sqlite page size per fetch and loops until no rows remain for current filters
+- `report --max-rows <n>`: optional total cap for current run
 
 Optional filters can narrow selection by app/scene/params/item/date/custom SQL predicate.
 For task-scoped workflows, pass `--task-id <TASK_ID>` so only current-task rows are selected.
@@ -51,7 +53,8 @@ For task-scoped workflows, pass `--task-id <TASK_ID>` so only current-task rows 
 - `collect-stop` queries `after_count` and prints:
   - `delta`: total row increment in table
   - `task_delta`: new rows for current `TaskID` after start snapshot
-  - `jsonl_lines`: raw collected event line count in `~/.eval/<TaskID>/*.jsonl`
+  - `records_jsonl`: line count in `~/.eval/<TaskID>/*_records.jsonl`
+  - `tracking_events`: line count in `~/.eval/<TaskID>/*_track.jsonl`
   - `runtime_sec`: collection runtime in seconds
 
 `collect` does not update `reported/reported_at/report_error`; those fields remain managed by `report` and `retry-reset`.
