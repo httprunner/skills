@@ -188,14 +188,14 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-function runBitableLookup(args: string[]) {
-  const run = spawnSync("npx", ["tsx", "scripts/bitable_lookup.ts", "fetch", ...args], {
+function runDramaFetchMeta(args: string[]) {
+  const run = spawnSync("npx", ["tsx", "scripts/drama_fetch.ts", "--format", "meta", ...args], {
     cwd: taskManagerDir(),
     encoding: "utf-8",
     env: process.env,
     maxBuffer: 50 * 1024 * 1024,
   });
-  if (run.status !== 0) throw new Error(`bitable-lookup fetch failed: ${run.stderr || run.stdout}`);
+  if (run.status !== 0) throw new Error(`drama-fetch meta failed: ${run.stderr || run.stdout}`);
   const out = String(run.stdout || "");
   const rows: Record<string, string>[] = [];
   for (const line of out.split("\n")) {
@@ -401,7 +401,7 @@ async function main() {
   >();
 
   for (const batch of chunk(bookIDs, 50)) {
-    const rows = runBitableLookup([
+    const rows = runDramaFetchMeta([
       "--bitable-url",
       dramaURL,
       "--book-id",

@@ -20,6 +20,7 @@ import {
 import fs from "node:fs";
 import chalk from "chalk";
 import { Command } from "commander";
+import { fetchSourceRecords } from "./drama_fetch";
 
 const createMaxBatchSize = 500;
 
@@ -182,7 +183,8 @@ async function fetchAllRecords(baseURL: string, token: string, ref: BitableRef, 
     const body: any = {};
     if (useView && viewID) body.view_id = viewID;
     if (filterObj) body.filter = filterObj;
-    const resp = await RequestJSON("POST", urlStr, token, Object.keys(body).length ? body : null, true);
+    // Some Feishu tables reject POST /records/search without a JSON body (null/empty body => code 9499).
+    const resp = await RequestJSON("POST", urlStr, token, body, true);
     if (resp.code !== 0) throw new Error(`search records failed: code=${resp.code} msg=${resp.msg}`);
     const batch = resp.data?.items || [];
     items.push(...batch);
@@ -192,6 +194,42 @@ async function fetchAllRecords(baseURL: string, token: string, ref: BitableRef, 
     if (!pageToken) break;
   }
   return items;
+}
+
+async function fetchTableFieldNames(baseURL: string, token: string, ref: BitableRef) {
+  const out: string[] = [];
+  let pageToken = "";
+  while (true) {
+    const q = new URLSearchParams();
+    q.set("page_size", "500");
+    if (pageToken) q.set("page_token", pageToken);
+    const urlStr = `${baseURL.replace(/\/+$/, "")}/open-apis/bitable/v1/apps/${ref.AppToken}/tables/${ref.TableID}/fields?${q.toString()}`;
+    const resp = await RequestJSON("GET", urlStr, token, null, true);
+    if (resp.code !== 0) throw new Error(`list fields failed: code=${resp.code} msg=${resp.msg}`);
+    const items = resp.data?.items || [];
+    for (const item of items) {
+      const name = NormalizeBitableValue(item?.field_name).trim();
+      if (name) out.push(name);
+    }
+    if (!resp.data?.has_more) break;
+    pageToken = String(resp.data?.page_token || "").trim();
+    if (!pageToken) break;
+  }
+  return out;
+}
+
+function resolveFieldName(fieldNames: string[], preferred: string, candidates: string[]) {
+  const byLower = new Map<string, string>();
+  for (const name of fieldNames) {
+    const key = name.trim().toLowerCase();
+    if (key && !byLower.has(key)) byLower.set(key, name);
+  }
+  const tryList = [preferred, ...candidates].map((x) => x.trim()).filter(Boolean);
+  for (const item of tryList) {
+    const hit = byLower.get(item.toLowerCase());
+    if (hit) return hit;
+  }
+  return "";
 }
 
 function resolveFilterDate(preset: string) {
@@ -222,6 +260,28 @@ function resolveExactDateMs(day: string) {
   const ms = Date.parse(`${trimmed}T00:00:00`);
   if (Number.isNaN(ms)) return "";
   return String(ms);
+}
+
+function parseCSVList(raw: string) {
+  return raw
+    .split(/[\s,，]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function buildORIsFilter(fieldName: string, values: string[]) {
+  const name = fieldName.trim();
+  if (!name) return null;
+  const seen = new Set<string>();
+  const conds: any[] = [];
+  for (const v of values) {
+    const val = v.trim();
+    if (!val || seen.has(val)) continue;
+    seen.add(val);
+    conds.push({ field_name: name, operator: "is", value: [val] });
+  }
+  if (!conds.length) return null;
+  return conds.length === 1 ? { conjunction: "and", conditions: conds } : { conjunction: "or", conditions: conds };
 }
 
 function buildTaskFilter(fieldsMap: Record<string, string>, app: string, scene: string, datePreset: string) {
@@ -446,274 +506,149 @@ async function loadExistingBookIDs(baseURL: string, token: string, taskRef: Bita
   return existingBookIDs;
 }
 
+async function runCreateOrSync(opts: any) {
+  const inputPath = (opts.input || "").trim();
+  const sourceURL = (opts.bitableUrl || "").trim();
+  if (!inputPath && !sourceURL) {
+    errLogger.error("one source is required", { hint: "--input <path> or --bitable-url <url>" });
+    process.exit(2);
+  }
+  const taskURL = (opts.taskUrl || Env("TASK_BITABLE_URL", "")).trim();
+  if (!taskURL) {
+    errLogger.error("task url is required", { hint: "--task-url or TASK_BITABLE_URL" });
+    process.exit(2);
+  }
+  const appID = Env("FEISHU_APP_ID", "");
+  const appSecret = Env("FEISHU_APP_SECRET", "");
+  if (!appID || !appSecret) {
+    errLogger.error("FEISHU_APP_ID/FEISHU_APP_SECRET are required");
+    process.exit(2);
+  }
+  const baseURL = Env("FEISHU_BASE_URL", DefaultBaseURL);
+  const fieldsMap = LoadTaskFieldsFromEnv();
+  const sourceFieldMap = normalizeSourceFieldMap(opts);
+  let taskRef: BitableRef;
+  try {
+    taskRef = ParseBitableURL(taskURL);
+  } catch (err: any) {
+    errLogger.error("parse bitable URL failed", { err: err?.message || String(err) });
+    process.exit(2);
+  }
+  let token: string;
+  try {
+    token = await GetTenantAccessToken(baseURL, appID, appSecret);
+  } catch (err: any) {
+    errLogger.error("get tenant access token failed", { err: err?.message || String(err) });
+    process.exit(2);
+  }
+  try {
+    taskRef = await resolveBitableRef(baseURL, token, taskRef);
+  } catch (err: any) {
+    errLogger.error("resolve bitable app token failed", { err: err?.message || String(err) });
+    process.exit(2);
+  }
+  const useView = false;
+  const pageSize = 200;
+  const limit = Number.isFinite(opts.limit) ? Math.max(0, Number(opts.limit)) : 0;
+
+  let sourceFields: Array<Record<string, any>> = [];
+  let sourceTotal = 0;
+  if (inputPath) {
+    sourceFields = parseInputItems(inputPath).map((it: any) => (it && typeof it === "object" && (it as any).fields ? (it as any).fields : it));
+    if (limit > 0) sourceFields = sourceFields.slice(0, limit);
+    sourceTotal = sourceFields.length;
+  } else {
+    const bookIDs = parseCSVList(String(opts.bookId || "").trim());
+    try {
+      const res = await fetchSourceRecords({
+        bitableURL: sourceURL,
+        bookIDs,
+        bidField: String(opts.bidField || ""),
+        pageSize,
+        limit,
+        appID,
+        appSecret,
+        baseURL,
+      });
+      sourceFields = res.items.map((it: any) => it.fields || {});
+      sourceTotal = res.items.length;
+    } catch (err: any) {
+      errLogger.error("fetch source rows failed", { err: err?.message || String(err) });
+      process.exit(2);
+    }
+  }
+
+  const fixedOpts = { ...opts, scene: "综合页搜索", date: "Today", status: "pending" };
+  const { derived, filtered } = deriveTasksFromSource(sourceFields, sourceFieldMap, fixedOpts);
+  let existingBookIDs = new Set<string>();
+  const skipExisting = Boolean(opts.skipExisting);
+  if (skipExisting) {
+    existingBookIDs = await loadExistingBookIDs(baseURL, token, taskRef, fieldsMap, fixedOpts, pageSize, useView);
+  }
+  const createDate = todayDateString();
+  let skipped = 0;
+  const records = derived
+    .filter((item) => {
+      if (!skipExisting) return true;
+      const exists = existingBookIDs.has(item.book_id);
+      if (exists) skipped++;
+      return !exists;
+    })
+    .map((item) => buildTaskFields(fieldsMap, { ...item, date: createDate }))
+    .filter((fields) => Object.keys(fields).length)
+    .map((fields) => ({ fields }));
+  if (!records.length) {
+    logger.info("result", { data: { source_total: sourceTotal, derived: derived.length, filtered, created: 0, skipped } });
+    process.exit(0);
+  }
+  let created = 0;
+  const start = Date.now();
+  const errors: string[] = [];
+  for (let i = 0; i < records.length; i += createMaxBatchSize) {
+    const batch = records.slice(i, i + createMaxBatchSize);
+    try {
+      await batchCreate(baseURL, token, taskRef, batch);
+      created += batch.length;
+    } catch (err: any) {
+      errors.push(err?.message || String(err));
+      break;
+    }
+  }
+  const elapsed = Math.floor(((Date.now() - start) / 1000) * 1000) / 1000;
+  logger.info("result", {
+    data: { source_total: sourceTotal, filtered, derived: derived.length, created, skipped, failed: errors.length, errors, elapsed_seconds: elapsed },
+  });
+  process.exit(errors.length ? 1 : 0);
+}
+
 async function main() {
-  const argv = process.argv.slice(2);
   const program = new Command();
   program
-    .name("bitable-derive")
-    .description("Derive tasks from a source Feishu Bitable")
+    .name("drama-sync-task")
+    .description("Create tasks from --input JSON/JSONL or source Bitable (--bitable-url)")
     .option("--log-json", "Output logs as JSON lines")
-    .helpOption(true);
-
-  const sourceFieldOptions = (cmd: Command) =>
-    cmd
-      .option("--bid-field <name>", "Source field name for BID")
-      .option("--title-field <name>", "Source field name for 短剧名")
-      .option("--scene-field <name>", "Source field name for 维权场景")
-      .option("--actor-field <name>", "Source field name for 主角名")
-      .option("--paid-field <name>", "Source field name for 付费剧名");
-
-  program
-    .command("fetch")
-    .description("Fetch source Bitable records and output JSONL")
+    .allowExcessArguments(false)
+    .option("--input <path>", "Input JSONL path (or - for stdin)")
     .option("--bitable-url <url>", "Source Bitable URL (original table)")
-    .option("--output <path>", "Output path for JSONL (default stdout)")
-    .action(async (opts) => {
+    .option("--book-id <value>", "Optional source BookID/BID filter (single value or comma-separated list)")
+    .option("--task-url <url>", "Task Bitable URL (default: TASK_BITABLE_URL)")
+    .option("--limit <count>", "Limit number of source rows to process", (v) => Number.parseInt(v, 10))
+    .option("--app <app>", "Task app", "com.smile.gifmaker")
+    .option("--extra <extra>", "Task extra", "春节档专项")
+    .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
+    .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
+    .option("--bid-field <name>", "Source field name for BID")
+    .option("--title-field <name>", "Source field name for 短剧名")
+    .option("--scene-field <name>", "Source field name for 维权场景")
+    .option("--actor-field <name>", "Source field name for 主角名")
+    .option("--paid-field <name>", "Source field name for 付费剧名")
+    .helpOption(true);
+  program.action(async (opts) => {
     setLoggerJSON(Boolean(program.opts()?.logJson));
-    const sourceURL = (opts.bitableUrl || "").trim();
-    if (!sourceURL) {
-      errLogger.error("bitable url is required", { hint: "--bitable-url" });
-      process.exit(2);
-    }
-    const appID = Env("FEISHU_APP_ID", "");
-    const appSecret = Env("FEISHU_APP_SECRET", "");
-    if (!appID || !appSecret) {
-      errLogger.error("FEISHU_APP_ID/FEISHU_APP_SECRET are required");
-      process.exit(2);
-    }
-    const baseURL = Env("FEISHU_BASE_URL", DefaultBaseURL);
-    let sourceRef: BitableRef;
-    try {
-      sourceRef = ParseBitableURL(sourceURL);
-    } catch (err: any) {
-      errLogger.error("parse bitable URL failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    let token: string;
-    try {
-      token = await GetTenantAccessToken(baseURL, appID, appSecret);
-    } catch (err: any) {
-      errLogger.error("get tenant access token failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    try {
-      sourceRef = await resolveBitableRef(baseURL, token, sourceRef);
-    } catch (err: any) {
-      errLogger.error("resolve bitable app token failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    const sourceItems = await fetchAllRecords(baseURL, token, sourceRef, 200, sourceRef.ViewID, Boolean(sourceRef.ViewID), null);
-    const out = opts.output ? fs.createWriteStream(opts.output) : process.stdout;
-    for (const item of sourceItems) {
-      const fieldsRaw = item.fields || {};
-      const simplified = simplifyFields(fieldsRaw);
-      out.write(`${JSON.stringify(simplified)}\n`);
-    }
-    logger.info("result", { data: { source_total: sourceItems.length, output: opts.output || "-" } });
+    await runCreateOrSync(opts);
   });
 
-  sourceFieldOptions(
-    program
-      .command("create")
-      .description("Create tasks from JSONL generated by fetch")
-      .allowExcessArguments(false)
-      .option("--input <path>", "Input JSONL path (or - for stdin)")
-      .option("--task-url <url>", "Task Bitable URL (default: TASK_BITABLE_URL)")
-      .option("--limit <count>", "Limit number of source rows to process", (v) => Number.parseInt(v, 10))
-      .option("--app <app>", "Task app", "com.smile.gifmaker")
-      .option("--extra <extra>", "Task extra", "春节档专项")
-      .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
-      .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
-  ).action(async (opts) => {
-    setLoggerJSON(Boolean(program.opts()?.logJson));
-    const inputPath = (opts.input || "").trim();
-    if (!inputPath) {
-      errLogger.error("input path is required", { hint: "--input" });
-      process.exit(2);
-    }
-    const taskURL = (opts.taskUrl || Env("TASK_BITABLE_URL", "")).trim();
-    if (!taskURL) {
-      errLogger.error("task url is required", { hint: "--task-url or TASK_BITABLE_URL" });
-      process.exit(2);
-    }
-    const appID = Env("FEISHU_APP_ID", "");
-    const appSecret = Env("FEISHU_APP_SECRET", "");
-    if (!appID || !appSecret) {
-      errLogger.error("FEISHU_APP_ID/FEISHU_APP_SECRET are required");
-      process.exit(2);
-    }
-    const baseURL = Env("FEISHU_BASE_URL", DefaultBaseURL);
-    const fieldsMap = LoadTaskFieldsFromEnv();
-    const sourceFieldMap = normalizeSourceFieldMap(opts);
-    let taskRef: BitableRef;
-    try {
-      taskRef = ParseBitableURL(taskURL);
-    } catch (err: any) {
-      errLogger.error("parse bitable URL failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    let token: string;
-    try {
-      token = await GetTenantAccessToken(baseURL, appID, appSecret);
-    } catch (err: any) {
-      errLogger.error("get tenant access token failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    try {
-      taskRef = await resolveBitableRef(baseURL, token, taskRef);
-    } catch (err: any) {
-      errLogger.error("resolve bitable app token failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    const useView = false;
-    const pageSize = 200;
-    let sourceItems = parseInputItems(inputPath).map((it: any) => (it && typeof it === "object" && (it as any).fields ? (it as any).fields : it));
-    const limit = Number.isFinite(opts.limit) ? Math.max(0, Number(opts.limit)) : 0;
-    if (limit > 0) sourceItems = sourceItems.slice(0, limit);
-    const fixedOpts = { ...opts, scene: "综合页搜索", date: "Today", status: "pending" };
-    const { derived, filtered } = deriveTasksFromSource(sourceItems, sourceFieldMap, fixedOpts);
-    let existingBookIDs = new Set<string>();
-    const skipExisting = Boolean(opts.skipExisting);
-    if (skipExisting) {
-      existingBookIDs = await loadExistingBookIDs(baseURL, token, taskRef, fieldsMap, fixedOpts, pageSize, useView);
-    }
-    const createDate = todayDateString();
-    let skipped = 0;
-    const records = derived
-      .filter((item) => {
-        if (!skipExisting) return true;
-        const exists = existingBookIDs.has(item.book_id);
-        if (exists) skipped++;
-        return !exists;
-      })
-      .map((item) => buildTaskFields(fieldsMap, { ...item, date: createDate }))
-      .filter((fields) => Object.keys(fields).length)
-      .map((fields) => ({ fields }));
-    if (!records.length) {
-      logger.info("result", { data: { derived: derived.length, filtered, created: 0, skipped } });
-      process.exit(0);
-    }
-    let created = 0;
-    const start = Date.now();
-    const errors: string[] = [];
-    for (let i = 0; i < records.length; i += createMaxBatchSize) {
-      const batch = records.slice(i, i + createMaxBatchSize);
-      try {
-        await batchCreate(baseURL, token, taskRef, batch);
-        created += batch.length;
-      } catch (err: any) {
-        errors.push(err?.message || String(err));
-        break;
-      }
-    }
-    const elapsed = Math.floor(((Date.now() - start) / 1000) * 1000) / 1000;
-    logger.info("result", { data: { derived: derived.length, filtered, created, skipped, failed: errors.length, errors, elapsed_seconds: elapsed } });
-    process.exit(errors.length ? 1 : 0);
-  });
-
-  sourceFieldOptions(
-    program
-      .command("sync")
-      .description("Fetch source and create tasks in one step")
-      .option("--bitable-url <url>", "Source Bitable URL (original table)")
-      .option("--task-url <url>", "Task Bitable URL (default: TASK_BITABLE_URL)")
-      .option("--limit <count>", "Limit number of source rows to process", (v) => Number.parseInt(v, 10))
-      .option("--app <app>", "Task app", "com.smile.gifmaker")
-      .option("--extra <extra>", "Task extra", "春节档专项")
-      .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
-      .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
-  ).action(async (opts) => {
-    setLoggerJSON(Boolean(program.opts()?.logJson));
-    const sourceURL = (opts.bitableUrl || "").trim();
-    if (!sourceURL) {
-      errLogger.error("bitable url is required", { hint: "--bitable-url" });
-      process.exit(2);
-    }
-    const taskURL = (opts.taskUrl || "").trim();
-    if (!taskURL) {
-      errLogger.error("task url is required", { hint: "--task-url" });
-      process.exit(2);
-    }
-    const appID = Env("FEISHU_APP_ID", "");
-    const appSecret = Env("FEISHU_APP_SECRET", "");
-    if (!appID || !appSecret) {
-      errLogger.error("FEISHU_APP_ID/FEISHU_APP_SECRET are required");
-      process.exit(2);
-    }
-    const baseURL = Env("FEISHU_BASE_URL", DefaultBaseURL);
-    const fieldsMap = LoadTaskFieldsFromEnv();
-    const sourceFieldMap = normalizeSourceFieldMap(opts);
-    let sourceRef: BitableRef;
-    let taskRef: BitableRef;
-    try {
-      sourceRef = ParseBitableURL(sourceURL);
-      taskRef = ParseBitableURL(taskURL);
-    } catch (err: any) {
-      errLogger.error("parse bitable URL failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    let token: string;
-    try {
-      token = await GetTenantAccessToken(baseURL, appID, appSecret);
-    } catch (err: any) {
-      errLogger.error("get tenant access token failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    try {
-      sourceRef = await resolveBitableRef(baseURL, token, sourceRef);
-      taskRef = await resolveBitableRef(baseURL, token, taskRef);
-    } catch (err: any) {
-      errLogger.error("resolve bitable app token failed", { err: err?.message || String(err) });
-      process.exit(2);
-    }
-    const useView = false;
-    const pageSize = 200;
-    const limit = Number.isFinite(opts.limit) ? Math.max(0, Number(opts.limit)) : 0;
-    const sourceItems = await fetchAllRecords(baseURL, token, sourceRef, pageSize, sourceRef.ViewID, Boolean(sourceRef.ViewID), null, limit || undefined);
-    const sourceFields = sourceItems.map((it: any) => it.fields || {});
-    const fixedOpts = { ...opts, scene: "综合页搜索", date: "Today", status: "pending" };
-    const { derived, filtered } = deriveTasksFromSource(sourceFields, sourceFieldMap, fixedOpts);
-    let existingBookIDs = new Set<string>();
-    const skipExisting = Boolean(opts.skipExisting);
-    if (skipExisting) {
-      existingBookIDs = await loadExistingBookIDs(baseURL, token, taskRef, fieldsMap, fixedOpts, pageSize, useView);
-    }
-    const createDate = todayDateString();
-    let skipped = 0;
-    const records = derived
-      .filter((item) => {
-        if (!skipExisting) return true;
-        const exists = existingBookIDs.has(item.book_id);
-        if (exists) skipped++;
-        return !exists;
-      })
-      .map((item) => buildTaskFields(fieldsMap, { ...item, date: createDate }))
-      .filter((fields) => Object.keys(fields).length)
-      .map((fields) => ({ fields }));
-    if (!records.length) {
-      logger.info("result", { data: { source_total: sourceItems.length, filtered, created: 0, skipped } });
-      process.exit(0);
-    }
-    let created = 0;
-    const start = Date.now();
-    const errors: string[] = [];
-    for (let i = 0; i < records.length; i += createMaxBatchSize) {
-      const batch = records.slice(i, i + createMaxBatchSize);
-      try {
-        await batchCreate(baseURL, token, taskRef, batch);
-        created += batch.length;
-      } catch (err: any) {
-        errors.push(err?.message || String(err));
-        break;
-      }
-    }
-    const elapsed = Math.floor(((Date.now() - start) / 1000) * 1000) / 1000;
-    logger.info("result", { data: { source_total: sourceItems.length, filtered, derived: derived.length, created, skipped, failed: errors.length, errors, elapsed_seconds: elapsed } });
-    process.exit(errors.length ? 1 : 0);
-  });
-
-  program.parse(argv, { from: "user" });
-  getGlobalOptions(program);
+  await program.parseAsync(process.argv);
 }
 
 main().catch((err) => {

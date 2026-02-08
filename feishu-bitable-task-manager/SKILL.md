@@ -86,18 +86,20 @@ npx tsx scripts/bitable_task.ts create \
   --skip-existing BizTaskID
 ```
 
-### Lookup (read-only)
+### Drama Fetch (read-only)
 
-Fetch drama meta by BookID from `DRAMA_BITABLE_URL` (or an explicit `--bitable-url`):
+Fetch rows from source drama Bitable by optional BookID filter. Use `--format meta` when callers need normalized drama metadata fields:
 
 ```bash
-npx tsx scripts/bitable_lookup.ts fetch --bitable-url "<DRAMA_BITABLE_URL>" --book-id "id1,id2"
+npx tsx scripts/drama_fetch.ts --bitable-url "<DRAMA_BITABLE_URL>" --book-id "id1,id2" --format meta
 ```
 
 ### Derive tasks from a source Bitable (原始多维表格)
 
+`sync` accepts either `--input` or `--bitable-url` (optionally with `--book-id`) and handles task creation:
+
 ```bash
-npx tsx scripts/bitable_derive.ts sync \
+npx tsx scripts/drama_sync_task.ts \
   --bitable-url "https://.../base/SOURCE_APP?table=SOURCE_TABLE" \
   --task-url "https://.../base/TASK_APP?table=TASK_TABLE" \
   --app com.smile.gifmaker \
@@ -114,4 +116,4 @@ npx tsx scripts/bitable_derive.ts sync \
 - Read `references/task-update.md` for status updates, timing fields, and batch update rules.
 - Read `references/task-create.md` for create payload rules and batch create behavior.
 - Read `references/feishu-integration.md` for Feishu API endpoints and request/response payloads.
-- Use `scripts/bitable_task.ts` / `scripts/bitable_lookup.ts` / `scripts/bitable_derive.ts` as the source of truth for flags and behavior.
+- Use `scripts/bitable_task.ts` / `scripts/drama_fetch.ts` / `scripts/drama_sync_task.ts` as the source of truth for flags and behavior.

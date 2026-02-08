@@ -52,7 +52,7 @@ npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <TASK_ID>
 
 - 调用其它 skills 时遵循各自的 `Path Convention` / `路径约定`（统一安装路径：`~/.agents/skills/<skill>/`），推荐在脚本里使用单条 subshell 执行避免 `cd` 漂移：
   - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/bitable_task.ts ...)`
-  - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/bitable_lookup.ts fetch ...)`
+  - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/drama_fetch.ts --format meta ...)`
   - `(cd ~/.agents/skills/group-webhook-dispatch && npx tsx scripts/upsert_webhook_plan.ts ...)`
 
 ## Resources
