@@ -34,12 +34,12 @@ export function must(name: string) {
   return v;
 }
 
-function expandHome(p: string) {
+export function expandHome(p: string) {
   if (!p.startsWith("~")) return p;
   return p.replace(/^~(?=$|\/)/, os.homedir());
 }
 
-function toDay(v: any) {
+export function toDay(v: any) {
   const s = String(v ?? "").trim();
   if (!s) return "";
   if (/^\d{13}$/.test(s)) {
@@ -54,7 +54,7 @@ function toDay(v: any) {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
 }
 
-function dayStartMs(day: string) {
+export function dayStartMs(day: string) {
   const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return 0;
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
@@ -83,7 +83,7 @@ function sqliteJSON(dbPath: string, sql: string): any[] {
   return Array.isArray(data) ? data : [];
 }
 
-function parseTaskIDs(v: any): number[] {
+export function parseTaskIDs(v: any): number[] {
   if (Array.isArray(v)) {
     return Array.from(new Set(v.map((x) => Math.trunc(Number(x))).filter((n) => Number.isFinite(n) && n > 0)));
   }
@@ -105,9 +105,9 @@ function parseTaskIDs(v: any): number[] {
   );
 }
 
-type BitableRef = { appToken: string; tableID: string; viewID: string; wikiToken: string };
+export type BitableRef = { appToken: string; tableID: string; viewID: string; wikiToken: string };
 
-function parseBitableURL(raw: string): BitableRef {
+export function parseBitableURL(raw: string): BitableRef {
   const u = new URL(raw);
   const seg = u.pathname.split("/").filter(Boolean);
   let appToken = "";
@@ -122,7 +122,7 @@ function parseBitableURL(raw: string): BitableRef {
   return { appToken, tableID, viewID, wikiToken };
 }
 
-async function requestJSON(method: string, url: string, token: string, body: any) {
+export async function requestJSON(method: string, url: string, token: string, body: any) {
   const res = await fetch(url, {
     method,
     headers: {
@@ -138,7 +138,7 @@ async function requestJSON(method: string, url: string, token: string, body: any
   return data;
 }
 
-async function getTenantToken(baseURL: string, appID: string, appSecret: string) {
+export async function getTenantToken(baseURL: string, appID: string, appSecret: string) {
   const url = `${baseURL}/open-apis/auth/v3/tenant_access_token/internal`;
   const data = await requestJSON("POST", url, "", { app_id: appID, app_secret: appSecret });
   const token = String(data.tenant_access_token || "").trim();
@@ -146,7 +146,7 @@ async function getTenantToken(baseURL: string, appID: string, appSecret: string)
   return token;
 }
 
-async function resolveWikiToken(baseURL: string, token: string, wikiToken: string) {
+export async function resolveWikiToken(baseURL: string, token: string, wikiToken: string) {
   const url = `${baseURL}/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(wikiToken)}`;
   const data = await requestJSON("GET", url, token, null);
   const objToken = String(data?.data?.node?.obj_token || "").trim();
@@ -154,16 +154,19 @@ async function resolveWikiToken(baseURL: string, token: string, wikiToken: strin
   return objToken;
 }
 
-function condition(field: string, op: string, ...vals: any[]) {
+export function condition(field: string, op: string, ...vals: any[]) {
   return { field_name: field, operator: op, value: vals };
 }
-function andFilter(conditions: any[], children: any[] = []) {
+export function andFilter(conditions: any[], children: any[] = []) {
   return { conjunction: "and", conditions, children };
 }
+export function orFilter(conditions: any[]) {
+  return { conjunction: "or", conditions };
+}
 
-type FeishuCtx = { baseURL: string; token: string };
+export type FeishuCtx = { baseURL: string; token: string };
 
-async function searchRecords(ctx: FeishuCtx, bitableURL: string, filter: any, pageSize = 200, limit = 200) {
+export async function searchRecords(ctx: FeishuCtx, bitableURL: string, filter: any, pageSize = 200, limit = 200) {
   const ref = parseBitableURL(bitableURL);
   if (!ref.appToken && ref.wikiToken) ref.appToken = await resolveWikiToken(ctx.baseURL, ctx.token, ref.wikiToken);
   if (!ref.appToken) throw new Error("bitable app token missing");
@@ -188,7 +191,25 @@ async function searchRecords(ctx: FeishuCtx, bitableURL: string, filter: any, pa
   return out;
 }
 
-async function batchUpdate(ctx: FeishuCtx, bitableURL: string, records: Array<{ record_id: string; fields: Record<string, any> }>) {
+export async function batchCreate(ctx: FeishuCtx, bitableURL: string, records: Array<{ fields: Record<string, any> }>) {
+  if (!records.length) return { recordIDs: [] as string[] };
+  const ref = parseBitableURL(bitableURL);
+  if (!ref.appToken && ref.wikiToken) ref.appToken = await resolveWikiToken(ctx.baseURL, ctx.token, ref.wikiToken);
+  if (!ref.appToken) throw new Error("bitable app token missing");
+  const url = `${ctx.baseURL}/open-apis/bitable/v1/apps/${ref.appToken}/tables/${ref.tableID}/records/batch_create`;
+  const recordIDs: string[] = [];
+  for (let i = 0; i < records.length; i += 500) {
+    const data = await requestJSON("POST", url, ctx.token, { records: records.slice(i, i + 500) });
+    const created = Array.isArray(data?.data?.records) ? data.data.records : [];
+    for (const row of created) {
+      const id = String(row?.record_id || "").trim();
+      if (id) recordIDs.push(id);
+    }
+  }
+  return { recordIDs };
+}
+
+export async function batchUpdate(ctx: FeishuCtx, bitableURL: string, records: Array<{ record_id: string; fields: Record<string, any> }>) {
   if (!records.length) return;
   const ref = parseBitableURL(bitableURL);
   if (!ref.appToken && ref.wikiToken) ref.appToken = await resolveWikiToken(ctx.baseURL, ctx.token, ref.wikiToken);
@@ -212,7 +233,7 @@ function taskFields() {
   };
 }
 
-function webhookFields() {
+export function webhookFields() {
   return {
     BizType: env("WEBHOOK_FIELD_BIZTYPE", "BizType"),
     GroupID: env("WEBHOOK_FIELD_GROUPID", "GroupID"),

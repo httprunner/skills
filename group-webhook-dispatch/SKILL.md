@@ -1,48 +1,53 @@
 ---
 name: group-webhook-dispatch
-description: Group 任务完成后的 webhook 推送编排：事件触发即时检查/推送 + reconcile 单次补偿。
+description: Dispatch, reconcile, and upsert group webhook pushes after tasks reach terminal states. Use to trigger by TaskID/GroupID, run one-shot backfill by date for pending/failed, and write webhook plans into WEBHOOK_BITABLE_URL (JSON/JSONL).
 ---
 
 # Group Webhook Dispatch
 
-用于替代常驻 webhook worker，采用“事件驱动 + 按需补偿”的运行方式。
+用于替代常驻 webhook worker，采用“事件驱动 + 按需补偿”的运行方式：触发时检查是否就绪并推送；必要时按日期做一次补偿扫描。
 
-## 做什么
+## Quick start（事件触发，推荐）
 
-1. `dispatch_webhook.ts`：任务完成后按 `task-id` 或 `group-id` 触发单组检查与推送。
-2. `reconcile_webhook.ts`：按日期扫描 `pending/failed`，做一次补偿处理。
-3. 统一状态机：仅当同组同日任务全部终态才推送，并回写 `pending/failed/success/error`。
-
-## 快速入口
+在 `group-webhook-dispatch/` 目录运行：
 
 ```bash
 npx tsx scripts/dispatch_webhook.ts --task-id <TASK_ID>
 ```
 
-## Webhook 计划 upsert
+## Entry points
 
-当你需要为某个 Group/日期创建或更新 webhook 推送计划（写入 `WEBHOOK_BITABLE_URL`）时使用。
+- `scripts/dispatch_webhook.ts`: 按 `--task-id` 或 `--group-id` 触发单组检查与推送
+- `scripts/reconcile_webhook.ts`: 按 `--date` 扫描 `pending/failed` 做单次补偿
+- `scripts/upsert_webhook_plan.ts`: 向 `WEBHOOK_BITABLE_URL` 批量创建/更新 webhook 计划（upsert）
+- `scripts/webhook_lib.ts`: Feishu/SQLite/状态机公共逻辑
 
-```bash
-npx tsx scripts/upsert_webhook_plan.ts --input <JSON/JSONL_FILE>
-```
+## Webhook 计划 upsert（JSON/JSONL）
 
-输入 item 约定（JSON/JSONL）：
+输入 item 约定：
 - `group_id`（必填）
 - `date`（必填，`YYYY-MM-DD`）
 - `biz_type`（可选，默认 `piracy_general_search`）
 - `task_ids`（必填，数组）
 - `drama_info`（可选，JSON 字符串）
 
-环境变量：
+运行：
+
+```bash
+npx tsx scripts/upsert_webhook_plan.ts --input <JSON/JSONL_FILE>
+```
+
+## Required env
+
 - `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
 - `TASK_BITABLE_URL`, `WEBHOOK_BITABLE_URL`
 - `CRAWLER_SERVICE_BASE_URL`
-- 可选 `TRACKING_STORAGE_DB_PATH`（默认 `~/.eval/records.sqlite`）
+- Optional: `TRACKING_STORAGE_DB_PATH`（默认 `~/.eval/records.sqlite`）
 
-## 资源
+## Debugging
 
-- `scripts/webhook_lib.ts`: Feishu/SQLite/状态机公共逻辑
-- `scripts/dispatch_webhook.ts`: 单组触发入口
-- `scripts/reconcile_webhook.ts`: 补偿入口
-- `references/commands.md`: 完整命令（含环境变量、调试、补偿）
+- 使用 `--dry-run` 只打印将要执行的动作，不写表、不发 webhook。
+
+## Resources
+
+- Read `references/commands.md` for full command examples (env, debug, reconcile).

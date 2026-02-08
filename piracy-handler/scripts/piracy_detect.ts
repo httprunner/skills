@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawnSync } from "child_process";
 import { Command } from "commander";
-import os from "os";
 import path from "path";
 import fs from "fs";
+import { dayStartMs, defaultDetectPath, ensureDir, env, expandHome, must, parsePositiveInt, toDay } from "./lib";
 
 type CLIOptions = {
   taskId: string;
@@ -46,61 +46,13 @@ function parseCLI(argv: string[]): CLIOptions {
   return program.opts<CLIOptions>();
 }
 
-function env(name: string, def = "") {
-  const v = (process.env[name] || "").trim();
-  return v || def;
-}
-
-function must(name: string) {
-  const v = env(name, "");
-  if (!v) throw new Error(`${name} is required`);
-  return v;
-}
-
-function expandHome(p: string) {
-  if (!p.startsWith("~")) return p;
-  return p.replace(/^~(?=$|\/)/, os.homedir());
-}
-
-function ensureDir(dirPath: string) {
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function defaultDetectPath(taskID: number) {
-  return path.join(os.homedir(), ".eval", String(taskID), "detect.json");
-}
-
 function toNumber(v: any, d = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
 }
 
 function parseTaskID(raw: any) {
-  const n = Math.trunc(Number(raw));
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`invalid task id: ${raw}`);
-  return n;
-}
-
-function dayStartMs(day: string) {
-  const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return 0;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-  return d.getTime();
-}
-
-function toDay(v: any) {
-  const s = String(v ?? "").trim();
-  if (!s) return "";
-  if (/^\d{13}$/.test(s)) {
-    const d = new Date(Number(s));
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  if (/^\d{10}$/.test(s)) {
-    const d = new Date(Number(s) * 1000);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+  return parsePositiveInt(raw, "task id");
 }
 
 type LogLevel = "silent" | "error" | "info" | "debug";
@@ -272,7 +224,7 @@ async function main() {
   const dramaURL = must("DRAMA_BITABLE_URL");
 
   // parent task (task table via feishu-bitable-task-manager)
-  const parentTasks = runTaskFetch(["--task-ids", String(taskID), "--status", "Any", "--date", "Any"]);
+  const parentTasks = runTaskFetch(["--task-id", String(taskID), "--status", "Any", "--date", "Any"]);
   if (!parentTasks.length) throw new Error(`parent task not found: ${taskID}`);
   const parentTask = parentTasks[0];
   const parentApp = String(args.app || parentTask.app || "").trim();
@@ -332,7 +284,7 @@ async function main() {
   // resolve tasks by ids via task-manager
   const taskMap = new Map<number, TaskRow>();
   for (const batch of chunk(taskIDs, 50)) {
-    const tasks = runTaskFetch(["--task-ids", batch.join(","), "--status", "Any", "--date", "Any"]);
+    const tasks = runTaskFetch(["--task-id", batch.join(","), "--status", "Any", "--date", "Any"]);
     for (const t of tasks) {
       if (typeof t?.task_id === "number" && t.task_id > 0 && !taskMap.has(t.task_id)) taskMap.set(t.task_id, t);
     }
@@ -452,7 +404,7 @@ async function main() {
     const rows = runBitableLookup([
       "--bitable-url",
       dramaURL,
-      "--book-ids",
+      "--book-id",
       batch.join(","),
     ]);
     for (const row of rows) {

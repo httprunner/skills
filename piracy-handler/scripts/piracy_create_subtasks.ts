@@ -1,30 +1,13 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import fs from "fs";
-import os from "os";
 import path from "path";
-import { spawnSync } from "child_process";
+import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskCreate, runTaskFetch } from "./lib";
 
 type CLIOptions = {
   input?: string;
   taskId?: string;
   dryRun: boolean;
 };
-
-function expandHome(p: string) {
-  if (!p.startsWith("~")) return p;
-  return p.replace(/^~(?=$|\/)/, os.homedir());
-}
-
-function defaultDetectPath(taskID: number) {
-  return path.join(os.homedir(), ".eval", String(taskID), "detect.json");
-}
-
-function readInput(pathArg: string): string {
-  const p = String(pathArg || "").trim();
-  if (!p || p === "-") return fs.readFileSync(0, "utf-8");
-  return fs.readFileSync(expandHome(p), "utf-8");
-}
 
 function parseCLI(argv: string[]): CLIOptions {
   const program = new Command();
@@ -40,56 +23,6 @@ function parseCLI(argv: string[]): CLIOptions {
   return program.opts<CLIOptions>();
 }
 
-function taskManagerDir() {
-  return path.resolve(__dirname, "../../feishu-bitable-task-manager");
-}
-
-type TaskRow = { task_id: number; group_id: string };
-
-function parseTaskManagerFetchOutput(stdout: string): TaskRow[] {
-  const out: TaskRow[] = [];
-  for (const line of String(stdout || "").split("\n")) {
-    const s = line.trim();
-    if (!s) continue;
-    try {
-      const obj = JSON.parse(s);
-      if (obj?.msg === "task" && obj?.task) out.push(obj.task as TaskRow);
-    } catch {
-      // ignore
-    }
-  }
-  return out;
-}
-
-function runTaskFetch(args: string[]) {
-  const run = spawnSync("npx", ["tsx", "scripts/bitable_task.ts", "fetch", "--log-json", "--jsonl", ...args], {
-    cwd: taskManagerDir(),
-    encoding: "utf-8",
-    env: process.env,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  if (run.status !== 0) throw new Error(`bitable-task fetch failed: ${run.stderr || run.stdout}`);
-  return parseTaskManagerFetchOutput(String(run.stdout || ""));
-}
-
-function runTaskCreate(jsonl: string) {
-  const run = spawnSync("npx", ["tsx", "scripts/bitable_task.ts", "create", "--input", "-"], {
-    cwd: taskManagerDir(),
-    encoding: "utf-8",
-    env: process.env,
-    input: jsonl,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  if (run.status !== 0) throw new Error(`bitable-task create failed: ${run.stderr || run.stdout}`);
-  return String(run.stdout || "");
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-
 async function main() {
   const args = parseCLI(process.argv);
   const dryRun = Boolean(args.dryRun);
@@ -99,8 +32,7 @@ async function main() {
   if (inputArg) {
     detectText = readInput(inputArg);
   } else if (taskIDArg) {
-    const tid = Math.trunc(Number(taskIDArg));
-    if (!Number.isFinite(tid) || tid <= 0) throw new Error(`invalid --task-id: ${taskIDArg}`);
+    const tid = parsePositiveInt(taskIDArg, "--task-id");
     detectText = readInput(defaultDetectPath(tid));
   } else {
     throw new Error("either --input or --task-id is required");
@@ -131,7 +63,7 @@ async function main() {
     const ids = Array.from(new Set(groups.map((g) => String(g?.group_id || "").trim()).filter(Boolean)));
     for (const batch of chunk(ids, 40)) {
       const tasks = runTaskFetch([
-        "--group-ids",
+        "--group-id",
         batch.join(","),
         "--app",
         app,

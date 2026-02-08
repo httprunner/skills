@@ -90,7 +90,7 @@ async function main() {
     .command("fetch")
     .description("Fetch drama meta by 短剧id list")
     .requiredOption("--bitable-url <url>", "Drama Bitable URL (DRAMA_BITABLE_URL)")
-    .requiredOption("--book-ids <csv>", "BookID(s), comma-separated (e.g. 111 or 111,222,333)")
+    .requiredOption("--book-id <csv>", "BookID(s), comma-separated (e.g. 111 or 111,222,333)")
     .option("--page-size <n>", "Page size (max 500)", "200")
     .option("--limit <n>", "Max records to return (0 = no cap)", "0")
     .option("--output <path>", "Output path for JSONL (default stdout)")
@@ -98,7 +98,7 @@ async function main() {
       const bitableURL = String(opts.bitableUrl || "").trim();
       let bookIDs: string[] = [];
       try {
-        bookIDs = parseCSVArg(opts.bookIds, "--book-ids");
+        bookIDs = parseCSVArg(opts.bookId, "--book-id");
       } catch (err: any) {
         process.stderr.write(`[feishu-bitable-task-manager] ${err?.message || String(err)}\n`);
         process.exit(2);
@@ -111,7 +111,7 @@ async function main() {
         process.exit(2);
       }
       if (!bookIDs.length) {
-        process.stderr.write("[feishu-bitable-task-manager] --book-ids is empty\n");
+        process.stderr.write("[feishu-bitable-task-manager] --book-id is empty\n");
         process.exit(2);
       }
 

@@ -1,94 +1,47 @@
 ---
 name: feishu-bitable-task-manager
-description: Manage tasks in Feishu Bitable (multi-dimensional table), fetch, update, and create flows using a fixed schema, filters, pagination, and status update rules. Use when building or running task pullers/reporters that must match a specific task status table and its field mapping, status presets, and date presets.
+description: Manage task records in Feishu Bitable (飞书多维表格) using a fixed task-status table schema and TASK_FIELD_* overrides. Use to fetch/claim/update/create tasks, look up drama metadata by BookID, or derive tasks from a source Bitable (JSON/JSONL in/out).
 ---
 
-# Feishu Bitable Task Manager (TypeScript)
+# Feishu Bitable Task Manager
 
-Follow the task table conventions when pulling and updating tasks in Feishu Bitable.
+Use this skill to read/write tasks in a Feishu Bitable “task status table” while staying compatible with its schema conventions.
 
-## Workflow
+## Quick start
 
-1) Load env and field mappings.
-- Require `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `TASK_BITABLE_URL`.
-- Apply `TASK_FIELD_*` overrides if the table uses custom column names.
-
-2) Resolve Bitable identity.
-- Parse the Bitable URL to get `app_token`/`wiki_token`, `table_id`, and optional `view_id`.
-- If the URL is wiki-based, call `wiki/v2/spaces/get_node` to resolve the app token.
-
-3) Build table filters (fetch/resolve paths).
-- When not fetching by ID, filter by `App`, `Scene`, `Status`, and `Date` presets.
-- If a specific `TaskID` or `BizTaskID` is provided, fetch directly by that ID (no `App`/`Scene` required).
-- Date presets are **literal strings**: `Today`, `Yesterday`, `Any`.
-- For explicit dates (`YYYY-MM-DD`), use `ExactDate` filter payload when the table Date column is a datetime type. If the column is plain text, use the literal date string.
-- Default status is `pending` when omitted.
-- `--status` supports comma-separated priority list (e.g. `pending,failed`). When `--limit` is set, it fills from the first status, then falls back to the next if insufficient.
-
-4) Call Feishu Bitable search.
-- `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/search`
-- Use `page_size` + `page_token` for pagination.
-- Respect `view_id` only when explicitly enabled (`--use-view`); default ignores view.
-
-5) Validate decoded tasks.
-- Keep only rows with `TaskID != 0` and at least one of `Params`, `ItemID`, `BookID`, `URL`, `UserID`, `UserName`.
-
-6) Claim tasks for multi-worker execution.
-- Use `claim` to atomically-ish bind a task to a device (running + DispatchedDevice) and verify by re-reading the record.
-- `--scene` supports comma-separated priority list (e.g. `个人页搜索,综合页搜索`); earlier scenes are fetched first.
-- If `GET record` fails, wait 1s and fall back to search by `TaskID`.
-
-7) Update task status/metadata.
-- Resolve `record_id` from `TaskID` or `BizTaskID` when needed.
-- Use `records/batch_update` for multiple updates, `records/{record_id}` for single updates.
-- Apply status + timing + metrics updates using the task table field mapping.
-- For JSONL ingestion, update any fields whose keys match column names, and map `CDNURL`/`cdn_url` to `Extra`.
-- Use `--skip-status` to skip updates for tasks already in a given status (comma-separated).
-
-8) Create tasks.
-- Use `records/batch_create` for multiple tasks, `records` for single create.
-- Accept JSON/JSONL input (same key conventions as update); map `CDNURL`/`cdn_url` to `Extra`.
-- Use `--skip-existing <fields>` to skip creation when existing records match on the given fields (all must match).
-
-9) Derive tasks from a source Bitable (原始多维表格).
-- Source core fields: `BID`, `短剧名`, `维权场景`, `主角名`, `付费剧名`.
-- Filter source records: `BID` non-empty AND `BID` != `暂无` AND `短剧名` non-empty AND `维权场景` non-empty.
-- Before creating, query today’s tasks once and build a `BookID` set. Use task-table filter `App=com.smile.gifmaker`, `Scene=综合页搜索`, `Date=Today`, then skip any source record whose `BID` exists in the fetched `BookID` set.
-- For each source record not skipped, create tasks with base fields `BookID=<BID>`, `Scene=综合页搜索`, `Date=Today`, `Status=pending`, `App=com.smile.gifmaker`, `Extra=春节档专项`.
-- Task 1 (短剧名): set `Params=<短剧名>`.
-- Task 2 (主角名): only if non-empty. Replace commas with spaces before setting `Params=<主角名>`.
-- Task 3 (付费剧名): only if `付费剧名` is non-empty and `付费剧名` != `短剧名`; set `Params=<付费剧名>`.
-
-## Run (TypeScript)
-
-Use `npx tsx` so you can execute without building a binary:
+Run from `feishu-bitable-task-manager/`:
 
 ```bash
 npx tsx scripts/bitable_task.ts <subcommand> [flags]
 ```
 
-Fetch drama meta by `短剧id` (BookID) from `DRAMA_BITABLE_URL`：
+## Required env
+
+- `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
+- `TASK_BITABLE_URL`
+- Optional: `FEISHU_BASE_URL`
+- Optional: `TASK_FIELD_*` (override task table column names)
+
+## Key defaults (compat rules)
+
+- Treat date presets as literal strings: `Today`, `Yesterday`, `Any` (`Any` means no date constraint).
+- Prefer fetching by `--task-id` / `--biz-task-id` when possible (it overrides `--app/--scene/--status/--date`).
+- Ignore view filtering by default; use view filtering only when explicitly enabled (see `references/task-fetch.md`).
+- Keep only decoded rows with `TaskID != 0` and at least one of `Params/ItemID/BookID/URL/UserID/UserName`.
+- Allow comma-separated priority lists for `--status` / `--scene` (fill earlier values first when `--limit` is set).
+- When ingesting JSON/JSONL, pass through keys that match column names; map `CDNURL`/`cdn_url` into `Extra` when present.
+
+## Commands
+
+### Fetch
 
 ```bash
-npx tsx scripts/bitable_lookup.ts fetch --bitable-url "<DRAMA_BITABLE_URL>" --book-ids "id1"
-npx tsx scripts/bitable_lookup.ts fetch --bitable-url "<DRAMA_BITABLE_URL>" --book-ids "id1,id2"
-```
-
-## Examples
-
-```bash
-export FEISHU_APP_ID=...
-export FEISHU_APP_SECRET=...
-export TASK_BITABLE_URL="https://.../base/APP_TOKEN?table=TABLE_ID&view=VIEW_ID"
 npx tsx scripts/bitable_task.ts fetch --app com.smile.gifmaker --scene 综合页搜索 --status pending --date Today --limit 10
-npx tsx scripts/bitable_task.ts fetch --app com.smile.gifmaker --scene 综合页搜索 --status pending,failed --date Today --limit 10
-npx tsx scripts/bitable_task.ts fetch --app com.smile.gifmaker --scene 综合页搜索 --status pending --date 2026-02-05 --limit 10
-npx tsx scripts/bitable_task.ts fetch --task-ids "1326" --raw
-npx tsx scripts/bitable_task.ts fetch --task-ids "1326,1327" --status Any --date Any --jsonl --log-json
+npx tsx scripts/bitable_task.ts fetch --task-id "1326,1327" --raw
 npx tsx scripts/bitable_task.ts fetch --biz-task-id ext-20240101-001 --raw
-npx tsx scripts/bitable_task.ts fetch --group-ids "app_bid_uid1,app_bid_uid2" --date 2026-02-07 --status Any --scene Any --jsonl --log-json
 ```
-Use `--raw` when you need the `record_id` for follow-up updates.
+
+### Claim (multi-worker safe)
 
 ```bash
 npx tsx scripts/bitable_task.ts claim \
@@ -96,43 +49,17 @@ npx tsx scripts/bitable_task.ts claim \
   --scene 个人页搜索,综合页搜索 \
   --device-serial <serial> \
   --status pending,failed \
-  --date Today \
-  --log-level debug
+  --date Today
 ```
+
+### Update
 
 ```bash
-npx tsx scripts/bitable_task.ts update \
-  --task-id 180413 \
-  --status running \
-  --device-serial <serial> \
-  --dispatched-at now
+npx tsx scripts/bitable_task.ts update --task-id 180413 --status running --device-serial <serial> --dispatched-at now
+npx tsx scripts/bitable_task.ts update --input updates.jsonl
 ```
 
-Update single task by BizTaskID:
-
-```bash
-npx tsx scripts/bitable_task.ts update \
-  --biz-task-id ext-20240101-001 \
-  --status success \
-  --completed-at now
-```
-
-Update from JSONL output (per-line task updates):
-
-```bash
-npx tsx scripts/bitable_task.ts update --input output.jsonl
-```
-
-Update from JSONL with CLI defaults for missing fields:
-
-```bash
-npx tsx scripts/bitable_task.ts update \
-  --input tasks.jsonl \
-  --status ready \
-  --date 2026-01-27
-```
-
-Create tasks from JSONL with defaults:
+### Create
 
 ```bash
 npx tsx scripts/bitable_task.ts create \
@@ -140,61 +67,19 @@ npx tsx scripts/bitable_task.ts create \
   --app com.smile.gifmaker \
   --scene 单个链接采集 \
   --status pending \
-  --date 2026-01-27
-```
-
-Create from JSONL and skip when BizTaskID already exists:
-
-```bash
-npx tsx scripts/bitable_task.ts create \
-  --input tasks.jsonl \
-  --app com.smile.gifmaker \
-  --scene 单个链接采集 \
-  --status ready \
-  --date 2026-01-27 \
+  --date YYYY-MM-DD \
   --skip-existing BizTaskID
 ```
 
-Create from JSONL and skip when both BookID and UserID match existing records:
+### Lookup (read-only)
+
+Fetch drama meta by BookID from `DRAMA_BITABLE_URL` (or an explicit `--bitable-url`):
 
 ```bash
-npx tsx scripts/bitable_task.ts create \
-  --input tasks.jsonl \
-  --skip-existing BookID,UserID
+npx tsx scripts/bitable_lookup.ts fetch --bitable-url "<DRAMA_BITABLE_URL>" --book-id "id1,id2"
 ```
 
-Create a single task with explicit fields:
-
-```bash
-npx tsx scripts/bitable_task.ts create \
-  --biz-task-id GYS2601290001 \
-  --app com.smile.gifmaker \
-  --scene 单个链接采集 \
-  --status pending \
-  --date 2026-01-27 \
-  --book-id 7591421623471705150 \
-  --user-id 5891321132 \
-  --url https://www.kuaishou.com/short-video/3xcx7sk3yi583je
-```
-
-Derive tasks from source Bitable (原始多维表格):
-
-Fetch source and create tasks:
-
-```bash
-export FEISHU_APP_ID=...
-export FEISHU_APP_SECRET=...
-export TASK_BITABLE_URL="https://.../base/APP_TOKEN?table=TABLE_ID"
-npx tsx scripts/bitable_derive.ts sync \
-  --bitable-url "https://.../base/SOURCE_APP?table=SOURCE_TABLE" \
-  --task-url "https://.../base/TASK_APP?table=TASK_TABLE" \
-  --app com.smile.gifmaker \
-  --extra 春节档专项 \
-  --limit 10 \
-  --skip-existing
-```
-
-Create one task per source row and store `Params` as a JSON list `[短剧名, 主角名, 付费剧名]`:
+### Derive tasks from a source Bitable (原始多维表格)
 
 ```bash
 npx tsx scripts/bitable_derive.ts sync \
@@ -207,36 +92,11 @@ npx tsx scripts/bitable_derive.ts sync \
   --skip-existing
 ```
 
-Fetch source table to JSONL (fields are simplified to raw values, not typed objects):
-
-```bash
-npx tsx scripts/bitable_derive.ts fetch \
-  --bitable-url "https://.../base/SOURCE_APP?table=SOURCE_TABLE" \
-  --output source.jsonl
-```
-
-Create tasks from JSONL:
-
-```bash
-npx tsx scripts/bitable_derive.ts create \
-  --input source.jsonl \
-  --skip-existing \
-  --app com.smile.gifmaker \
-  --extra 春节档专项 \
-  --limit 10
-```
-
-Notes:
-- `bitable_derive.ts create --skip-existing` skips when a task already exists for the same `App + Scene + Date + BookID`.
-- `bitable_task.ts fetch --date YYYY-MM-DD` uses `ExactDate` filtering when the task table Date field is a datetime type (text Date columns should use the literal date string).
-
 ## Resources
 
 - Read `references/task-fetch.md` for filters, pagination, validation, and field mapping.
-- Read `references/task-update.md` for status updates, timing fields, and batch update rules.
 - Read `references/task-claim.md` for cross-machine safe task claiming.
+- Read `references/task-update.md` for status updates, timing fields, and batch update rules.
 - Read `references/task-create.md` for create payload rules and batch create behavior.
 - Read `references/feishu-integration.md` for Feishu API endpoints and request/response payloads.
-- `scripts/bitable_task.ts`: single CLI entrypoint (`fetch`/`claim`/`update`/`create`).
-- `scripts/bitable_derive.ts`: derive tasks from a source Bitable and create tasks in the task table.
-- `scripts/bitable_common.ts`: Feishu OpenAPI HTTP + token/wiki helpers + value/timestamp coercion + env field mapping.
+- Use `scripts/bitable_task.ts` / `scripts/bitable_lookup.ts` / `scripts/bitable_derive.ts` as the source of truth for flags and behavior.

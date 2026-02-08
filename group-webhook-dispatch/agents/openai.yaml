@@ -1,4 +1,4 @@
 interface:
   display_name: "Group Webhook Dispatch"
-  short_description: "Dispatch and reconcile group webhooks."
-  default_prompt: "Use $group-webhook-dispatch to dispatch or reconcile group webhook pushes for completed tasks."
+  short_description: "Dispatch/reconcile group webhooks and upsert plans."
+  default_prompt: "Use $group-webhook-dispatch to dispatch by task-id/group-id, reconcile pending/failed by date, and upsert webhook plans into WEBHOOK_BITABLE_URL."

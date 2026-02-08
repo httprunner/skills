@@ -298,10 +298,10 @@ async function FetchTasksOnce(opts: any): Promise<FetchResult | { err: true; cod
   }
   const fields = LoadTaskFieldsFromEnv();
   let filterObj = buildFilter(fields, opts.app || "", opts.scene || "", opts.status || "", opts.date || "");
-  if (opts.task_ids != null && String(opts.task_ids).trim()) {
+  if (opts.task_id != null && String(opts.task_id).trim()) {
     let ids: number[] = [];
     try {
-      ids = parsePositiveIntCSVOnlyArg(opts.task_ids, "--task-ids");
+      ids = parsePositiveIntCSVOnlyArg(opts.task_id, "--task-id");
     } catch (err: any) {
       errLogger.error(err?.message || String(err));
       return { err: true, code: 2 };
@@ -312,27 +312,25 @@ async function FetchTasksOnce(opts: any): Promise<FetchResult | { err: true; cod
     if (bizID) filterObj = buildIDFilter(fields["BizTaskID"], [bizID]);
   }
   if (opts.group_id != null && String(opts.group_id).trim()) {
-    const gid = String(opts.group_id).trim();
-    const name = (fields["GroupID"] || "").trim();
-    if (name && gid) {
-      const groupFilter = { conjunction: "and", conditions: [{ field_name: name, operator: "is", value: [gid] }] };
-      filterObj = mergeAndFilter(filterObj, groupFilter);
-    }
-  } else if (opts.group_ids != null && String(opts.group_ids).trim()) {
     let gids: string[] = [];
     try {
-      gids = parseCSVOnlyArg(opts.group_ids, "--group-ids");
+      gids = parseCSVOnlyArg(opts.group_id, "--group-id");
     } catch (err: any) {
       errLogger.error(err?.message || String(err));
       return { err: true, code: 2 };
     }
     const name = (fields["GroupID"] || "").trim();
     if (name && gids.length) {
-      const orFilter = {
-        conjunction: "or",
-        conditions: gids.map((x) => ({ field_name: name, operator: "is", value: [x] })),
-      };
-      filterObj = mergeAndFilter(filterObj, orFilter);
+      if (gids.length === 1) {
+        const groupFilter = { conjunction: "and", conditions: [{ field_name: name, operator: "is", value: [gids[0]] }] };
+        filterObj = mergeAndFilter(filterObj, groupFilter);
+      } else {
+        const orFilter = {
+          conjunction: "or",
+          conditions: gids.map((x) => ({ field_name: name, operator: "is", value: [x] })),
+        };
+        filterObj = mergeAndFilter(filterObj, orFilter);
+      }
     }
   }
   let token: string;
@@ -1597,10 +1595,9 @@ async function main() {
     .command("fetch")
     .description("Fetch tasks from Bitable")
     .option("--task-url <url>", "Bitable task table URL")
-    .option("--task-ids <csv>", "Fetch by task id(s), comma-separated (e.g. 111 or 111,222,333)")
+    .option("--task-id <csv>", "Fetch by TaskID(s), comma-separated (e.g. 111 or 111,222,333)")
     .option("--biz-task-id <id>", "Fetch by biz task id")
-    .option("--group-id <id>", "Fetch by group id")
-    .option("--group-ids <csv>", "Fetch by multiple group ids (comma-separated, e.g. 111,222,333)")
+    .option("--group-id <csv>", "Fetch by GroupID(s), comma-separated (e.g. g1 or g1,g2)")
     .option("--app <value>", "App value for filter (required)")
     .option("--scene <value>", "Scene value for filter (required)")
     .option("--status <value>", "Task status filter; supports comma-separated priority list (default: pending)")
@@ -1635,13 +1632,12 @@ async function main() {
       if (options.raw) opts.raw = true;
       if (options.app) opts.app = options.app;
       if (options.scene) opts.scene = options.scene;
-      if (options.taskIds) opts.task_ids = options.taskIds;
+      if (options.taskId) opts.task_id = options.taskId;
       if (options.bizTaskId) opts.biz_task_id = options.bizTaskId;
       if (options.groupId) opts.group_id = options.groupId;
-      if (options.groupIds) opts.group_ids = options.groupIds;
       if (!opts.app || !opts.scene) {
-        if (!opts.task_ids && !opts.biz_task_id && !opts.group_id && !opts.group_ids) {
-          errLogger.error("--app and --scene are required (or use --task-ids/--biz-task-id/--group-id/--group-ids)");
+        if (!opts.task_id && !opts.biz_task_id && !opts.group_id) {
+          errLogger.error("--app and --scene are required (or use --task-id/--biz-task-id/--group-id)");
           process.exit(2);
         }
       }
