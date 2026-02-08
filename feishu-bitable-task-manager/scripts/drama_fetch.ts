@@ -10,9 +10,8 @@ import {
   RequestJSON,
   ResolveWikiAppToken,
 } from "./bitable_common";
-import fs from "node:fs";
+import * as fs from "node:fs";
 import { Command } from "commander";
-import { pathToFileURL } from "node:url";
 
 type DramaFieldMap = {
   bookID: string;
@@ -27,6 +26,8 @@ export type SourceFetchParams = {
   bitableURL: string;
   bookIDs?: string[];
   bidField?: string;
+  priorities?: string[];
+  priorityField?: string;
   pageSize?: number;
   limit?: number;
   appID?: string;
@@ -37,6 +38,7 @@ export type SourceFetchParams = {
 export type SourceFetchResult = {
   items: any[];
   bidField: string | null;
+  priorityField: string | null;
   usedFilter: boolean;
 };
 
@@ -186,25 +188,48 @@ export async function fetchSourceRecords(params: SourceFetchParams): Promise<Sou
   const pageSize = Math.max(1, Number(params.pageSize || 200));
   const limit = Math.max(0, Number(params.limit || 0));
   const bookIDs = (params.bookIDs || []).map((x) => x.trim()).filter(Boolean);
+  const priorities = (params.priorities || []).map((x) => x.trim()).filter(Boolean);
 
   let ref = ParseBitableURL(bitableURL);
   const token = await GetTenantAccessToken(baseURL, appID, appSecret);
   ref = await resolveBitableRef(baseURL, token, ref);
 
   let bidField: string | null = null;
+  let priorityField: string | null = null;
   let filterObj: any = null;
+
+  const conditions: any[] = [];
+
+  const fieldNames = await fetchTableFieldNames(baseURL, token, ref);
+
   if (bookIDs.length) {
     const preferred = (params.bidField || Env("SOURCE_FIELD_BID", "BID")).trim() || "BID";
-    const fieldNames = await fetchTableFieldNames(baseURL, token, ref);
     const resolved = resolveFieldName(fieldNames, preferred, ["BID", "BookID", "book_id", "bookId", "短剧id"]);
     if (!resolved) throw new Error(`cannot resolve bid field in source table: preferred=${preferred}`);
     bidField = resolved;
-    filterObj = buildORIsFilter(bidField, bookIDs);
-    if (!filterObj) throw new Error("invalid bid field or book ids");
+    const bidFilter = buildORIsFilter(bidField, bookIDs);
+    if (!bidFilter) throw new Error("invalid bid field or book ids");
+    conditions.push(bidFilter);
+  }
+
+  if (priorities.length) {
+    const preferred = (params.priorityField || Env("SOURCE_FIELD_PRIORITY", "优先级")).trim() || "优先级";
+    const resolved = resolveFieldName(fieldNames, preferred, ["Priority", "priority", "优先级"]);
+    if (!resolved) throw new Error(`cannot resolve priority field in source table: preferred=${preferred}`);
+    priorityField = resolved;
+    const priorityFilter = buildORIsFilter(priorityField, priorities);
+    if (!priorityFilter) throw new Error("invalid priority field or priorities");
+    conditions.push(priorityFilter);
+  }
+
+  if (conditions.length === 1) {
+    filterObj = conditions[0];
+  } else if (conditions.length > 1) {
+    filterObj = { conjunction: "and", conditions };
   }
 
   const items = await fetchAllRecords(baseURL, token, ref, pageSize, ref.ViewID, Boolean(ref.ViewID), filterObj, limit || undefined);
-  return { items, bidField, usedFilter: Boolean(filterObj) };
+  return { items, bidField, priorityField, usedFilter: Boolean(filterObj) };
 }
 
 async function main() {
@@ -215,54 +240,57 @@ async function main() {
     .requiredOption("--bitable-url <url>", "Source Bitable URL")
     .option("--book-id <value>", "Optional BookID/BID filter (single value or comma-separated list)")
     .option("--bid-field <name>", "Preferred source field name for BID/BookID")
+    .option("--priority <value>", "Optional Priority filter (single value or comma-separated list)")
+    .option("--priority-field <name>", "Preferred source field name for Priority")
     .option("--page-size <n>", "Page size (max 500)", "200")
     .option("--limit <n>", "Max records to return (0 = no cap)", "0")
     .option("--format <name>", "Output format: raw|meta", "raw")
     .option("--output <path>", "Output path for JSONL (default stdout)")
     .action(async (opts) => {
-    const bookIDs = parseCSVList(String(opts.bookId || ""));
-    if (!bookIDs.length) {
-      process.stderr.write("[drama-fetch] hint: fetch without --book-id will scan all source rows\n");
-    }
-    const result = await fetchSourceRecords({
-      bitableURL: String(opts.bitableUrl || ""),
-      bookIDs,
-      bidField: String(opts.bidField || ""),
-      pageSize: Number(opts.pageSize || 200),
-      limit: Number(opts.limit || 0),
-    });
-    const out = opts.output ? fs.createWriteStream(String(opts.output)) : process.stdout;
-    const format = String(opts.format || "raw").trim().toLowerCase();
-    const dramaFields = dramaFieldsFromEnv();
-    for (const item of result.items) {
-      const fieldsRaw = item?.fields || {};
-      if (format === "meta") {
-        const row = {
-          record_id: NormalizeBitableValue(item?.record_id).trim(),
-          book_id: NormalizeBitableValue(fieldsRaw[dramaFields.bookID]).trim(),
-          name: NormalizeBitableValue(fieldsRaw[dramaFields.name]).trim(),
-          duration_min: NormalizeBitableValue(fieldsRaw[dramaFields.durationMin]).trim(),
-          episode_count: NormalizeBitableValue(fieldsRaw[dramaFields.episodeCount]).trim(),
-          rights_protection_scenario: NormalizeBitableValue(fieldsRaw[dramaFields.rightsProtectionScenario]).trim(),
-          priority: NormalizeBitableValue(fieldsRaw[dramaFields.priority]).trim(),
-        };
-        out.write(`${JSON.stringify(row)}\n`);
-        continue;
+      const bookIDs = parseCSVList(String(opts.bookId || ""));
+      const priorities = parseCSVList(String(opts.priority || ""));
+      if (!bookIDs.length && !priorities.length) {
+        process.stderr.write("[drama-fetch] hint: fetch without --book-id or --priority will scan all source rows\n");
       }
-      out.write(`${JSON.stringify(simplifyFields(fieldsRaw))}\n`);
-    }
-    process.stderr.write(
-      `[drama-fetch] fetched ${result.items.length} rows, filtered=${result.usedFilter}, bid_field=${result.bidField || "-"}\n`
-    );
-  });
+      const result = await fetchSourceRecords({
+        bitableURL: String(opts.bitableUrl || ""),
+        bookIDs,
+        bidField: String(opts.bidField || ""),
+        priorities,
+        priorityField: String(opts.priorityField || ""),
+        pageSize: Number(opts.pageSize || 200),
+        limit: Number(opts.limit || 0),
+      });
+      const out = opts.output ? fs.createWriteStream(String(opts.output)) : process.stdout;
+      const format = String(opts.format || "raw").trim().toLowerCase();
+      const dramaFields = dramaFieldsFromEnv();
+      for (const item of result.items) {
+        const fieldsRaw = item?.fields || {};
+        if (format === "meta") {
+          const row = {
+            record_id: NormalizeBitableValue(item?.record_id).trim(),
+            book_id: NormalizeBitableValue(fieldsRaw[dramaFields.bookID]).trim(),
+            name: NormalizeBitableValue(fieldsRaw[dramaFields.name]).trim(),
+            duration_min: NormalizeBitableValue(fieldsRaw[dramaFields.durationMin]).trim(),
+            episode_count: NormalizeBitableValue(fieldsRaw[dramaFields.episodeCount]).trim(),
+            rights_protection_scenario: NormalizeBitableValue(fieldsRaw[dramaFields.rightsProtectionScenario]).trim(),
+            priority: NormalizeBitableValue(fieldsRaw[dramaFields.priority]).trim(),
+          };
+          out.write(`${JSON.stringify(row)}\n`);
+          continue;
+        }
+        out.write(`${JSON.stringify(simplifyFields(fieldsRaw))}\n`);
+      }
+      process.stderr.write(
+        `[drama-fetch] fetched ${result.items.length} rows, filtered=${result.usedFilter}, bid_field=${result.bidField || "-"}, priority_field=${result.priorityField || "-"}\n`
+      );
+    });
 
   program.showHelpAfterError().showSuggestionAfterError();
   await program.parseAsync(process.argv);
 }
 
-const isMainModule = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
-
-if (isMainModule) {
+if (require.main === module) {
   main().catch((err) => {
     process.stderr.write(`[drama-fetch] ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);

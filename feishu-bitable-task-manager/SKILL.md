@@ -108,7 +108,7 @@ npx tsx scripts/drama_sync_task.ts \
   --bitable-url "https://.../base/SOURCE_APP?table=SOURCE_TABLE" \
   --task-url "https://.../base/TASK_APP?table=TASK_TABLE" \
   --app com.smile.gifmaker \
-  --extra 春节档专项 \
+  --extra "test" \
   --params-list \
   --limit 10 \
   --skip-existing

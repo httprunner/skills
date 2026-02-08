@@ -17,7 +17,7 @@ import {
   parseJSONItems,
   parseJSONLItems,
 } from "./bitable_common";
-import fs from "node:fs";
+import * as fs from "node:fs";
 import chalk from "chalk";
 import { Command } from "commander";
 import { fetchSourceRecords } from "./drama_fetch";
@@ -561,11 +561,14 @@ async function runCreateOrSync(opts: any) {
     sourceTotal = sourceFields.length;
   } else {
     const bookIDs = parseCSVList(String(opts.bookId || "").trim());
+    const priorities = parseCSVList(String(opts.priority || "").trim());
     try {
       const res = await fetchSourceRecords({
         bitableURL: sourceURL,
         bookIDs,
         bidField: String(opts.bidField || ""),
+        priorities,
+        priorityField: String(opts.priorityField || ""),
         pageSize,
         limit,
         appID,
@@ -636,7 +639,7 @@ async function main() {
     .option("--task-url <url>", "Task Bitable URL (default: TASK_BITABLE_URL)")
     .option("--limit <count>", "Limit number of source rows to process", (v) => Number.parseInt(v, 10))
     .option("--app <app>", "Task app", "com.smile.gifmaker")
-    .option("--extra <extra>", "Task extra", "春节档专项")
+    .option("--extra <extra>", "Task extra", "")
     .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
     .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
     .option("--bid-field <name>", "Source field name for BID")
@@ -645,6 +648,8 @@ async function main() {
     .option("--actor-field <name>", "Source field name for 主角名")
     .option("--paid-field <name>", "Source field name for 付费剧名")
     .option("--title-only", "Only create tasks for drama title")
+    .option("--priority <value>", "Optional Priority filter (single value or comma-separated list)")
+    .option("--priority-field <name>", "Preferred source field name for Priority")
     .helpOption(true);
   program.action(async (opts) => {
     setLoggerJSON(Boolean(program.opts()?.logJson));
@@ -654,7 +659,9 @@ async function main() {
   await program.parseAsync(process.argv);
 }
 
-main().catch((err) => {
-  errLogger.error("fatal", { err: err?.message || String(err) });
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err: any) => {
+    errLogger.error("fatal", { err: err?.message || String(err) });
+    process.exit(1);
+  });
+}
