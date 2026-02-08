@@ -12,3 +12,4 @@ __pycache__/
 !**/package-lock.json
 *.png
 node_modules/
+.DS_Store

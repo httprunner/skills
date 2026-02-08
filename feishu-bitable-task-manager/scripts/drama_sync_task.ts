@@ -105,11 +105,11 @@ type SourceItem = {
 
 function normalizeSourceFieldMap(opts: any): SourceFieldMap {
   return {
-    bid: (opts.bid_field || Env("SOURCE_FIELD_BID", "BID")).trim() || "BID",
-    title: (opts.title_field || Env("SOURCE_FIELD_TITLE", "短剧名")).trim() || "短剧名",
-    rightsScene: (opts.scene_field || Env("SOURCE_FIELD_RIGHTS_SCENE", "维权场景")).trim() || "维权场景",
-    actor: (opts.actor_field || Env("SOURCE_FIELD_ACTOR", "主角名")).trim() || "主角名",
-    paidTitle: (opts.paid_field || Env("SOURCE_FIELD_PAID_TITLE", "付费剧名")).trim() || "付费剧名",
+    bid: (opts.bidField || Env("SOURCE_FIELD_BID", "短剧id")).trim() || "短剧id",
+    title: (opts.titleField || Env("SOURCE_FIELD_TITLE", "短剧名")).trim() || "短剧名",
+    rightsScene: (opts.sceneField || Env("SOURCE_FIELD_RIGHTS_SCENE", "维权场景")).trim() || "维权场景",
+    actor: (opts.actorField || Env("SOURCE_FIELD_ACTOR", "主角名")).trim() || "主角名",
+    paidTitle: (opts.paidField || Env("SOURCE_FIELD_PAID_TITLE", "付费剧名")).trim() || "付费剧名",
   };
 }
 
@@ -455,6 +455,8 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
       book_id: src.bid,
       params: src.title,
     });
+    if (opts.titleOnly) continue;
+
     const actor = normalizeActor(src.actor);
     if (actor) {
       derived.push({
@@ -642,6 +644,7 @@ async function main() {
     .option("--scene-field <name>", "Source field name for 维权场景")
     .option("--actor-field <name>", "Source field name for 主角名")
     .option("--paid-field <name>", "Source field name for 付费剧名")
+    .option("--title-only", "Only create tasks for drama title")
     .helpOption(true);
   program.action(async (opts) => {
     setLoggerJSON(Boolean(program.opts()?.logJson));
