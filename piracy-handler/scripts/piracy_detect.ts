@@ -67,13 +67,13 @@ function createLogger(level: LogLevel, stream: NodeJS.WriteStream) {
   const can = (want: LogLevel) => rank[level] >= rank[want];
   const write = (want: LogLevel, msg: string, extra?: Record<string, unknown>) => {
     if (!can(want)) return;
-      const payload: Record<string, unknown> = {
-        time: new Date().toISOString(),
-        level: want.toUpperCase(),
-        mod: "piracy-handler",
-        msg,
-        ...(extra || {}),
-      };
+    const payload: Record<string, unknown> = {
+      time: new Date().toISOString(),
+      level: want.toUpperCase(),
+      mod: "piracy-handler",
+      msg,
+      ...(extra || {}),
+    };
     stream.write(`${JSON.stringify(payload)}\n`);
   };
   return {
@@ -85,12 +85,26 @@ function createLogger(level: LogLevel, stream: NodeJS.WriteStream) {
 
 // ---------- sqlite ----------
 function sqliteJSON(dbPath: string, sql: string): any[] {
-  const run = spawnSync("sqlite3", ["-json", dbPath, sql], { encoding: "utf-8" });
-  if (run.status !== 0) throw new Error(`sqlite query failed: ${run.stderr || run.stdout}`);
+  const run = spawnSync("sqlite3", ["-json", dbPath, sql], {
+    encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024,
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    let msg = String(run.stderr || run.stdout || "unknown error");
+    if (msg.length > 2000) msg = msg.slice(0, 2000) + "...(truncated)";
+    throw new Error(`sqlite query failed: ${msg}`);
+  }
   const out = (run.stdout || "").trim();
   if (!out) return [];
-  const data = JSON.parse(out);
-  return Array.isArray(data) ? data : [];
+  try {
+    const data = JSON.parse(out);
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    // ignore non-json noise? or throw?
+    // sqlite3 -json should return valid json
+    return [];
+  }
 }
 
 function sqliteTableColumns(dbPath: string, table: string): string[] {
@@ -261,17 +275,6 @@ async function main() {
     groups_above_threshold: 0,
   };
 
-  if (!rawRows.length) {
-    const out = { ...summary, selected_groups: [] as any[], summary };
-    const payload = JSON.stringify(out, null, 2);
-    if (args.output) {
-      const fs = await import("fs");
-      fs.writeFileSync(expandHome(args.output), payload);
-    } else {
-      process.stdout.write(payload + "\n");
-    }
-    return;
-  }
 
   const taskIDSet = new Set<number>();
   for (const row of rawRows) {
@@ -483,7 +486,28 @@ async function main() {
   const outPath = expandHome(outArg || defaultDetectPath(taskID));
   ensureDir(path.dirname(outPath));
   fs.writeFileSync(outPath, payload);
-  process.stdout.write(`${JSON.stringify({ output: outPath })}\n`);
+
+  console.log("----------------------------------------");
+  console.log(`PIRACY DETECT SUMMARY (TaskID: ${taskID})`);
+  console.log("----------------------------------------");
+  console.log(`DB Path:             ${dbPath}`);
+  console.log(`Threshold:           ${threshold}`);
+  console.log(`Capture Day:         ${day}`);
+  console.log(`SQLite Rows:         ${rawRows.length}`);
+  console.log(`Groups Aggregated:   ${groups.size}`);
+  console.log(`Groups Selected:     ${selected_groups.length}`);
+  if (summary.unresolved_task_ids.length > 0) {
+    console.log(`Unresolved Tasks:    ${summary.unresolved_task_ids.length}`);
+  }
+  if (summary.missing_drama_meta_book_ids.length > 0) {
+    console.log(`Missing Meta:        ${summary.missing_drama_meta_book_ids.length} books`);
+  }
+  if (summary.invalid_drama_duration_book_ids.length > 0) {
+    console.log(`Invalid Duration:    ${summary.invalid_drama_duration_book_ids.length} books`);
+  }
+  console.log("----------------------------------------");
+  console.log(`Output File:         ${outPath}`);
+  console.log("----------------------------------------");
 }
 
 main().catch((err) => {
