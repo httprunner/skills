@@ -52,7 +52,7 @@ Example:
 # 1) Screenshot
 mkdir -p ~/.eval/screenshots
 SCREENSHOT=~/.eval/screenshots/ui_$(date +"%Y%m%d_%H%M%S").png
-go run scripts/adb_helpers.go -s SERIAL screenshot -out "$SCREENSHOT"
+go run scripts/adb_helpers.go -s SERIAL screenshot --out "$SCREENSHOT"
 
 # 2) Query coordinates with ai-vision-go
 go run ../ai-vision-go/scripts/ai_vision.go query \

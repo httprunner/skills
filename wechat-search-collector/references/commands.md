@@ -64,7 +64,7 @@ WEBHOOK_RECONCILE() { (cd "$WEBHOOK_DIR" && npx tsx scripts/reconcile_webhook.ts
 - 截图（有 `TASK_ID` 用对应目录，否则用 debug；文件名前缀无需固定）：
   `SCREENSHOT=~/.eval/<TASK_ID>/$(date +"%Y%m%d_%H%M%S").png`
   `SCREENSHOT=~/.eval/debug/$(date +"%Y%m%d_%H%M%S").png`
-  `ADB -s SERIAL screenshot -out "$SCREENSHOT"`
+  `ADB -s SERIAL screenshot --out "$SCREENSHOT"`
 - 通过 ai-vision 获取下一步点击坐标：
   `VISION plan-next --screenshot "$SCREENSHOT" --prompt "<你的操作指令>"`
 - 点击坐标（ai-vision 输出为 0-1000 相对坐标，adb_helpers 会自动转换为绝对坐标）：

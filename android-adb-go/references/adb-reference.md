@@ -70,7 +70,7 @@
 ## Screenshots
 
 - Capture to file:
-  - `go run scripts/adb_helpers.go -s SERIAL screenshot -out "<path>/shot.png"`
+  - `go run scripts/adb_helpers.go -s SERIAL screenshot --out "<path>/shot.png"`
 
 ## UI tree
 
