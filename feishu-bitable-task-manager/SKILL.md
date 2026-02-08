@@ -43,6 +43,7 @@ npx tsx scripts/bitable_task.ts <subcommand> [flags]
 - Ignore view filtering by default; use view filtering only when explicitly enabled (see `references/task-fetch.md`).
 - Keep only decoded rows with `TaskID != 0` and at least one of `Params/ItemID/BookID/URL/UserID/UserName`.
 - Allow comma-separated priority lists for `--status` / `--scene` (fill earlier values first when `--limit` is set).
+- `fetch` and `claim` both split comma-separated `--scene` values and query each scene in order (do not treat the full CSV as one literal scene).
 - When ingesting JSON/JSONL, pass through keys that match column names; map `CDNURL`/`cdn_url` into `Extra` when present.
 
 ## Commands

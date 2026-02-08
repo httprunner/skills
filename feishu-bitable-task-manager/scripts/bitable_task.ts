@@ -498,28 +498,15 @@ function parseStaleMillis(value: string) {
 }
 
 async function FetchTasks(opts: any) {
+  const sceneList = parseCSVList(opts.scene || "");
   const statuses = parseCSVList(opts.status || "");
   const statusList = statuses.length ? statuses : ["pending"];
-  const tasks: Task[] = [];
-  let totalElapsed = 0;
-  let lastPageInfo = { hasMore: false, nextPageToken: "", pages: 0 };
-
   const limit = Number(opts.limit || 0);
-  for (const status of statusList) {
-    const remaining = limit > 0 ? Math.max(limit - tasks.length, 0) : 0;
-    if (limit > 0 && remaining <= 0) break;
-    const perOpts = { ...opts, status };
-    if (limit > 0) perOpts.limit = remaining;
-    const res = await FetchTasksOnce(perOpts);
-    if ("err" in res) return res.code;
-    tasks.push(...res.tasks);
-    totalElapsed += res.elapsedSeconds;
-    lastPageInfo = { hasMore: res.hasMore, nextPageToken: res.nextPageToken, pages: res.pages };
-    if (limit > 0 && tasks.length >= limit) {
-      tasks.splice(limit);
-      break;
-    }
-  }
+  const res = await FetchTasksForScenesAndStatuses(opts, sceneList, statusList, limit > 0 ? limit : 0);
+  if ("err" in res) return res.code;
+  const tasks = res.tasks;
+  const totalElapsed = res.elapsedSeconds;
+  const lastPageInfo = res.pageInfo;
 
   if (opts.jsonl) {
     for (const t of tasks) logger.info("task", { task: t });
@@ -1049,7 +1036,7 @@ async function ClaimTask(opts: any) {
       stale_action: staleAction,
       stale_limit: staleLimit,
     });
-    const staleFetch = await FetchTasksForStatuses({ ...commonOpts }, ["running"], staleLimit);
+    const staleFetch = await FetchTasksForScenesAndStatuses({ ...commonOpts }, sceneList, ["running"], staleLimit);
     if ("err" in staleFetch) return staleFetch.code;
     logger.debug("claim: running tasks fetched", { count: staleFetch.tasks.length });
     const now = Date.now();
