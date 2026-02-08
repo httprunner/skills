@@ -14,6 +14,7 @@ cd ~/.agents/skills/wechat-search-collector
 ```
 
 - 使用 `android-adb` 执行设备操作；使用 `ai-vision` 从截图定位元素（不要用 `dump-ui`）。
+- **关键**：所有 UI 操作（如点击、输入）必须使用 `plan-next` 进行规划和执行。严禁先执行 query 再使用返回坐标进行点击，因为存在坐标偏移问题。
 - 优先复用 `references/commands.md` 的函数封装（`ADB`/`VISION`/`TASK`/`REPORT`），避免 `cd` 漂移。
 - 产物目录：`TASK_ID` 存在则写 `~/.eval/<TASK_ID>/`，否则写 `~/.eval/debug/`（文件名带时间戳）。
 - 结果采集与上报：使用 `result-bitable-reporter`；进入微信流程前必须 `collect-start`，结束时必须 `collect-stop` + `report`。
@@ -103,6 +104,6 @@ cd ~/.agents/skills/wechat-search-collector
 - 调用 `feishu-bitable-task-manager` 更新该 `TaskID` 的字段：`Status` -> `success/failed/error`（基于任务执行结果）、`EndAt` ->`now`
 
 ## 备注与排障
-- 点击不准：重新截图，让 ai-vision 提供更精确坐标（不要改用 `dump-ui`）。
+- 点击不准：重新截图，让 ai-vision 提供更精确坐标（不要改用 `dump-ui`）。务必确认使用了 `plan-next` 而非 `query`。
 - 异常流程（弹窗遮挡或步骤卡住）：先识别弹窗并关闭，再继续原步骤。处理命令见 `references/commands.md`。
 - 任务超时限制：若单个任务执行时长超过 30 分钟，则终止执行，任务状态更新为 failed。
