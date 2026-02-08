@@ -7,6 +7,20 @@ description: HarmonyOS device control and UI automation via HDC. Use when tasks 
 
 Use this skill to drive HarmonyOS devices with `hdc` for common device management and UI actions.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/harmony-hdc-py/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/harmony-hdc-py
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/harmony-hdc-py && python scripts/hdc_helpers.py --help)
+```
+
 ## Quick workflow
 
 - Identify device: `hdc list targets`. If multiple devices, uses `-t <device_id>`.

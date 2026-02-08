@@ -7,6 +7,14 @@ description: Manage tasks in Feishu Bitable (multi-dimensional table), fetch, up
 
 Follow the task table conventions when pulling and updating tasks in Feishu Bitable.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/feishu-bitable-task-manager-py/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/feishu-bitable-task-manager-py
+```
+
 ## Workflow
 
 1) Load env and field mappings.

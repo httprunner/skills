@@ -7,6 +7,20 @@ description: Android device control and UI automation via ADB. Use when tasks in
 
 Use this skill to drive Android devices with `adb` for common device management and UI actions.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/android-adb-py/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/android-adb-py
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/android-adb-py && python scripts/adb_helpers.py --help)
+```
+
 ## Quick workflow
 
 - Identify device: `adb devices -l`. If multiple devices, always use `-s <device_id>`.

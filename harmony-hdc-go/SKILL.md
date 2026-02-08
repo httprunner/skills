@@ -7,6 +7,20 @@ description: HarmonyOS device control and UI automation via HDC with a Go helper
 
 Use this skill to drive HarmonyOS devices with `hdc` and the Go helper CLI for common device management and UI actions.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/harmony-hdc-go/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/harmony-hdc-go
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/harmony-hdc-go && go run scripts/hdc_helpers.go --help)
+```
+
 If `go` is not available, use the `go-installer` skill first. If that skill is not available, install it with `npx skills add httprunner/skills@go-installer`.
 
 ## Quick workflow

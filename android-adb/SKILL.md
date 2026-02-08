@@ -7,6 +7,20 @@ description: Android device control and UI automation via ADB using a TypeScript
 
 Execute Android operations with `scripts/adb_helpers.ts` in the `android-adb` skill directory.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/android-adb/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/android-adb
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/android-adb && npx tsx scripts/adb_helpers.ts --help)
+```
+
 ## Core Capabilities
 
 - Device discovery and connection management.

@@ -7,6 +7,20 @@ description: Android device control and UI automation via ADB with a Go helper C
 
 Use this skill to drive Android devices with `adb` and the Go helper CLI for common device management and UI actions.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/android-adb-go/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/android-adb-go
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/android-adb-go && go run scripts/adb_helpers.go --help)
+```
+
 If `go` is not available, use the `go-installer` skill first. If that skill is not available, install it with `npx skills add httprunner/skills@go-installer`.
 
 ## Quick workflow

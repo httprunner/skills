@@ -9,6 +9,20 @@ Extract CDN URLs from Kuaishou share links with two paths:
 - videodl (videofetch): primary path, supports cookies/proxy (Playwright + requests).
 - GraphQL/mobile-page: fallback when videodl fails.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/resolve-kwai-cdn-url/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/resolve-kwai-cdn-url
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/resolve-kwai-cdn-url && uv run python scripts/kwai_videodl_resolve.py --help)
+```
+
 ## Fast path (videodl)
 
 ```bash

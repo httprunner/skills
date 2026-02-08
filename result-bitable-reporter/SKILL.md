@@ -7,6 +7,20 @@ description: "Collect app events via evalpkgs into sqlite, then filter/report ca
 
 Use this skill for a deterministic `sqlite -> Feishu` result pipeline around `capture_results`.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/result-bitable-reporter/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/result-bitable-reporter
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/result-bitable-reporter && npx tsx scripts/result_reporter.ts --help)
+```
+
 ## Workflow
 
 1) Optional data collection:

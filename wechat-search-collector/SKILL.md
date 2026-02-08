@@ -8,8 +8,16 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 ## 概述
 本技能覆盖微信视频号在 Android 端的关键词搜索与结果遍历流程。
 
+## 路径约定
+
+统一安装与执行目录：`~/.agents/skills/wechat-search-collector/`。执行前先进入该目录：
+
+```bash
+cd ~/.agents/skills/wechat-search-collector
+```
+
 - 执行层需使用 `android-adb` 实现 Android 设备管理和 UI 操作，使用 `ai-vision` 从截图中定位 UI 元素并推理下一步动作，不要使用 `dump-ui` 做元素发现。当前 `ai-vision` 实现会输出已转换的绝对像素坐标，可直接用于 adb 操作。
-- 为避免依赖问题，所有命令需在各自 skill 目录内执行：`android-adb` 的命令在其目录运行，`ai-vision` 的命令在其目录运行。
+- 跨 skill 编排时，优先使用 `references/commands.md` 中的函数封装（`ADB`/`VISION`/`TASK`/`REPORT` 等），可在任意工作目录执行，避免 `cd` 漂移导致的路径问题。
 - 截图与相关产物输出目录由 `TASK_ID` 控制：若指定 `TASK_ID` 则写入 `~/.eval/<TASK_ID>/`，未指定则写入 `~/.eval/debug/`。文件名带时间戳避免覆盖。
 - 具体命令已抽离到 `references/commands.md`，流程中只描述关键步骤。
 - 如需从飞书多维表格拉取搜索任务，使用 `feishu-bitable-task-manager` 获取任务参数后再进入对应流程。

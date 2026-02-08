@@ -7,9 +7,23 @@ description: Manage task records in Feishu Bitable (飞书多维表格) using a 
 
 Use this skill to read/write tasks in a Feishu Bitable “task status table” while staying compatible with its schema conventions.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/feishu-bitable-task-manager/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/feishu-bitable-task-manager
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/bitable_task.ts --help)
+```
+
 ## Quick start
 
-Run from `feishu-bitable-task-manager/`:
+Run:
 
 ```bash
 npx tsx scripts/bitable_task.ts <subcommand> [flags]

@@ -7,9 +7,17 @@ description: 综合页搜索完成后，从本地 sqlite capture_results 聚类/
 
 用于“综合页搜索完成后”的后置编排：盗版检测（只读）→ 子任务创建 → webhook 计划 upsert。
 
+## 路径约定
+
+统一安装与执行目录：`~/.agents/skills/piracy-handler/`。执行前先进入该目录：
+
+```bash
+cd ~/.agents/skills/piracy-handler
+```
+
 ## Quick start
 
-在 `piracy-handler/` 目录运行：
+在 `~/.agents/skills/piracy-handler/` 目录运行：
 
 ```bash
 npx tsx scripts/piracy_detect.ts --task-id <TASK_ID>
@@ -42,9 +50,10 @@ npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <TASK_ID>
 
 ## Dependencies
 
-- 任务状态表读写：在 `feishu-bitable-task-manager/` 目录执行 `npx tsx scripts/bitable_task.ts ...`。
-- 剧单/元信息查询：在 `feishu-bitable-task-manager/` 目录执行 `npx tsx scripts/bitable_lookup.ts fetch ...`。
-- webhook 计划 upsert：在 `group-webhook-dispatch/` 目录执行 `npx tsx scripts/upsert_webhook_plan.ts ...`。
+- 调用其它 skills 时遵循各自的 `Path Convention` / `路径约定`（统一安装路径：`~/.agents/skills/<skill>/`），推荐在脚本里使用单条 subshell 执行避免 `cd` 漂移：
+  - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/bitable_task.ts ...)`
+  - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/bitable_lookup.ts fetch ...)`
+  - `(cd ~/.agents/skills/group-webhook-dispatch && npx tsx scripts/upsert_webhook_plan.ts ...)`
 
 ## Resources
 

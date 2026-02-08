@@ -7,9 +7,17 @@ description: Dispatch, reconcile, and upsert group webhook pushes after tasks re
 
 用于替代常驻 webhook worker，采用“事件驱动 + 按需补偿”的运行方式：触发时检查是否就绪并推送；必要时按日期做一次补偿扫描。
 
+## 路径约定
+
+统一安装与执行目录：`~/.agents/skills/group-webhook-dispatch/`。执行前先进入该目录：
+
+```bash
+cd ~/.agents/skills/group-webhook-dispatch
+```
+
 ## Quick start（事件触发，推荐）
 
-在 `group-webhook-dispatch/` 目录运行：
+在 `~/.agents/skills/group-webhook-dispatch/` 目录运行：
 
 ```bash
 npx tsx scripts/dispatch_webhook.ts --task-id <TASK_ID>

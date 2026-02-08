@@ -7,6 +7,14 @@ description: Install and verify the Go toolchain on macOS, Linux, and Windows. U
 
 Install or verify the Go toolchain with system package managers first, then fall back to official Go downloads when needed.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/go-installer/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/go-installer
+```
+
 ## Quick workflow
 
 1. Check whether Go is already installed.

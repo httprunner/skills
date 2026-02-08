@@ -7,6 +7,20 @@ description: HarmonyOS device control and UI automation via HDC with a TypeScrip
 
 Use this skill to drive HarmonyOS devices with `hdc` and the TypeScript helper CLI for common device management and UI actions.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/harmony-hdc/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/harmony-hdc
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/harmony-hdc && npx tsx scripts/hdc_helpers.ts --help)
+```
+
 ## Quick workflow
 
 - Identify device: `hdc list targets`. If multiple devices, uses `-t <device_id>`.

@@ -8,6 +8,20 @@ description: Multimodal UI understanding and single-step planning via OpenAI-com
 ## Overview
 This skill provides a standalone CLI to call multimodal models for UI querying, assertion, and **single-step** planning. It does not depend on device type; you supply a screenshot and receive structured output (coordinates, decisions, or next actions). Execution and multi-step loops are handled externally by agents using adb/hdc or other drivers. Prefer storing screenshots in `~/.eval/screenshots/` and add timestamps to avoid overwriting.
 
+## Path Convention
+
+Canonical install and execution directory: `~/.agents/skills/ai-vision/`. Run commands from this directory:
+
+```bash
+cd ~/.agents/skills/ai-vision
+```
+
+One-off (safe in scripts/loops from any working directory):
+
+```bash
+(cd ~/.agents/skills/ai-vision && npx tsx scripts/ai_vision.ts --help)
+```
+
 ## Model Configuration
 Default Doubao configuration via environment variables:
 - `ARK_BASE_URL` (e.g. `https://ark.cn-beijing.volces.com/api/v3`)
