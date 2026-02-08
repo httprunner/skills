@@ -1035,6 +1035,26 @@ program
   });
 
 program
+  .command("stat")
+  .description("Print total row count for one TaskID in capture_results")
+  .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
+  .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
+  .requiredOption("--task-id <value>", "Filter by exact TaskID (digits)")
+  .action((cmd) => {
+    const dbPath = resolveDBPath(cmd.dbPath);
+    const table = resolveTable(cmd.table);
+    const taskID = parseTaskIDNumber(String(cmd.taskId ?? ""));
+    const qTable = quoteIdent(table);
+    const rows = runSQLiteJSON<Array<{ count: number | string }>>(
+      dbPath,
+      `SELECT COUNT(*) AS count FROM ${qTable} WHERE TaskID = ${sqlLiteral(String(taskID))};`,
+    );
+    const value = rows[0]?.count ?? 0;
+    const count = typeof value === "number" ? value : Number(value);
+    process.stdout.write(`${Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0}\n`);
+  });
+
+program
   .command("filter")
   .description("Print selected rows as JSONL")
   .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")

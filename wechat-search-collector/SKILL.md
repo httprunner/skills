@@ -5,10 +5,7 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 
 # 微信视频号搜索
 
-## 概述
-本技能覆盖微信视频号在 Android 端的关键词搜索与结果遍历流程。
-
-## 路径约定
+## 约定
 
 统一安装与执行目录：`~/.agents/skills/wechat-search-collector/`。执行前先进入该目录：
 
@@ -16,32 +13,27 @@ description: 微信视频号搜索与结果遍历的自动化采集流程（Andr
 cd ~/.agents/skills/wechat-search-collector
 ```
 
-- 执行层需使用 `android-adb` 实现 Android 设备管理和 UI 操作，使用 `ai-vision` 从截图中定位 UI 元素并推理下一步动作，不要使用 `dump-ui` 做元素发现。当前 `ai-vision` 实现会输出已转换的绝对像素坐标，可直接用于 adb 操作。
-- 跨 skill 编排时，优先使用 `references/commands.md` 中的函数封装（`ADB`/`VISION`/`TASK`/`REPORT` 等），可在任意工作目录执行，避免 `cd` 漂移导致的路径问题。
-- 截图与相关产物输出目录由 `TASK_ID` 控制：若指定 `TASK_ID` 则写入 `~/.eval/<TASK_ID>/`，未指定则写入 `~/.eval/debug/`。文件名带时间戳避免覆盖。
-- 具体命令已抽离到 `references/commands.md`，流程中只描述关键步骤。
-- 如需从飞书多维表格拉取搜索任务，使用 `feishu-bitable-task-manager` 获取任务参数后再进入对应流程。
-- 结果采集与上报使用 `result-bitable-reporter`：前置必须启动 `collect`，收尾必须执行 `collect-stop` 与 `report`。
-- 场景结束后，需根据场景类型执行相应的后置处理：`piracy-handler`、`group-webhook-dispatch`。
+- 使用 `android-adb` 执行设备操作；使用 `ai-vision` 从截图定位元素（不要用 `dump-ui`）。
+- 优先复用 `references/commands.md` 的函数封装（`ADB`/`VISION`/`TASK`/`REPORT`），避免 `cd` 漂移。
+- 产物目录：`TASK_ID` 存在则写 `~/.eval/<TASK_ID>/`，否则写 `~/.eval/debug/`（文件名带时间戳）。
+- 结果采集与上报：使用 `result-bitable-reporter`；进入微信流程前必须 `collect-start`，结束时必须 `collect-stop` + `report`。
 
 ## 前置处理
-- 设备预检：确认驱动与依赖可用，读取环境变量 `SerialNumber` 获取设备 serial。
-- 任务拉取：
-  - 当需要“从任务表获取搜索任务并执行”时，先用 `feishu-bitable-task-manager` 的 `claim` 获取任务，将任务字段映射到本技能的参数。
-  - `claim` 默认拉取 `Date=Today` 且 status 为 `pending,failed` 的任务，并保证多节点多设备不会重复领取相同任务。
-  - 若在指令中指定场景类型，则拉取该场景的任务。
-    - 例如：`从飞书多维表格拉取一个微信视频号的综合页搜索的任务，开始执行`
-  - 若未指定场景类型，则按默认优先级 `--scene 个人页搜索,综合页搜索` 拉取。
-    - 例如：`从飞书多维表格拉取一个微信视频号的任务，开始执行`
-  - `claim` 已将该任务字段更新为：`Status=running`、`DispatchedDevice=<serial>`、`DispatchedAt=now`、`StartAt=now`。
-  - 根据任务的 `Scene` 进入对应流程：
-    - `综合页搜索` -> 综合页搜索流程
-    - `个人页搜索` -> 个人页搜索流程
-- 目录初始化：必须提供 `TASK_ID`（仅数字），创建输出目录 `~/.eval/<TASK_ID>/`；若缺失则失败结束。
-- 启动采集：
-  - 在进入微信搜索流程前，调用 `result-bitable-reporter` 的 `collect` 启动后台采集。
-  - 环境变量要求：`BUNDLE_ID`、`SerialNumber`。
-  - 参数要求：`--task-id <TASK_ID>`、`--db-path ~/.eval/records.sqlite`、`--table capture_results`。
+- 读取设备序列号：使用环境变量 `SerialNumber`（或 `ADB devices` 自行确认）。
+- 准备输出目录：`TASK_ID` 必须为数字；创建 `~/.eval/<TASK_ID>/`。
+- 启动采集：执行 `REPORT collect-start --task-id <TASK_ID> --db-path ~/.eval/records.sqlite --table capture_results`（见 `references/commands.md`）。
+- 可选拉取任务：用 `TASK claim` 从飞书领取任务；按 `Scene` 选择流程（综合页搜索 / 个人页搜索）。
+
+## 共享子流程：滚动结果到触底（每滑动 5 次检测一次）
+目标：避免视觉误判，优先用 sqlite `capture_results` 增量判断是否还有新增。
+
+1) 进入某个关键词结果页后，记录基线 `LAST_COUNT`：
+   `LAST_COUNT="$(REPORT stat --task-id <TASK_ID>)"`
+2) 循环执行直到触底：
+   - 滑动 5 次：`ADB -s <SERIAL> swipe 540 1800 540 400 --duration-ms 800`（循环 5 次）
+   - 查询当前总行数：`CUR_COUNT="$(REPORT stat --task-id <TASK_ID>)"`
+   - 若 `CUR_COUNT == LAST_COUNT` 连续出现 `N` 次（建议 `N=3`），判定触底；否则更新 `LAST_COUNT=CUR_COUNT` 并继续。
+3) sqlite 判定不可用时，用 `ai-vision assert` 二值兜底（不确定必须判定为否），见 `references/commands.md`。
 
 ## 综合页搜索流程
 适用于“在视频号综合页搜索单个或多个关键词并遍历结果”的需求。
@@ -65,9 +57,7 @@ cd ~/.agents/skills/wechat-search-collector
 
 ### 6. 结果滚动到底并切换下一个关键词
 - 每个关键词的结果页都执行“结果滚动到底”的滑动循环。
-- 不论结果多少，必须持续滑动直到确认触底（出现底部分割线、无更多提示或其他明确的触底标识），不得中途自行终止。
-- 触底判定需更稳健：若连续两次滑动后截图中仍是同一批末尾结果（封面/标题/时长/点赞等保持一致），且底部出现明显灰色空白区域/列表不再继续延伸/底部导航条已明显露出且内容不再变化，即可判定已触底，即使没有“无更多”提示；提示词需强制将“底部空白 + 内容不再延伸”视为到底（可在提示词中明确“仅当列表仍在继续延伸、底部仍被内容填满时才判定为否”）。
-- 频率要求：在结果页滚动过程中，每滑动 5 次检测一次是否已滑动到底。
+- 对每个关键词执行“共享子流程：滚动结果到触底（每滑动 5 次检测一次）”。
 - 确认触底后：点击搜索框确保输入框激活 -> 清空 -> 输入下一个关键词 -> 触发搜索，直到完成所有关键词的遍历。
 
 ### 7. 场景后置处理
@@ -98,9 +88,7 @@ cd ~/.agents/skills/wechat-search-collector
 ### 6. 在个人页依次搜索关键词
 - 对关键词列表 `KEYWORDS` 逐个执行：先点击个人页搜索框确保输入框激活 -> 清空 -> 输入关键词 -> 触发搜索 -> 滑动结果到底。
 - 每个关键词的结果页都执行“结果滚动到底”的滑动循环。
-- 不论结果多少，必须持续滑动直到确认触底（出现底部分割线、无更多提示或其他明确的触底标识），不得中途自行终止。
-- 触底判定规则同上（底部空白/导航条露出/内容不再变化视为已到底，即使没有“无更多”提示）。
-- 频率要求：在结果页滚动过程中，每滑动 5 次检测一次是否已滑动到底。
+- 对每个关键词执行“共享子流程：滚动结果到触底（每滑动 5 次检测一次）”。
 - 每个关键词搜索前确认仍在该账号个人页；若误退出则重进个人页后继续。
 
 ### 7. 场景后置处理

@@ -43,6 +43,16 @@ Optional filters can narrow selection by app/scene/params/item/date/custom SQL p
 For task-scoped workflows, pass `--task-id <TASK_ID>` so only current-task rows are selected.
 `TASK_ID` must be digits only.
 
+## Quick Stat (`stat`)
+
+Use `stat` to print total row count in `capture_results` for one TaskID.
+
+Examples:
+
+```bash
+npx tsx scripts/result_reporter.ts stat --task-id 20260206001
+```
+
 ## Collect Mode Validation
 
 `collect-start` and `collect-stop` perform a non-writeback validation around `capture_results`:

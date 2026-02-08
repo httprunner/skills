@@ -32,6 +32,9 @@ One-off (safe in scripts/loops from any working directory):
 - Task-scoped selection: pass `--task-id <TASK_ID>` to constrain rows to one task.
 - Default status filter is pending+failed (`reported IN (0, -1)`).
 
+Optional:
+- `stat`: print total sqlite row count for one `--task-id` (used for “did new rows arrive?” checks).
+
 3) Data reporting:
 - `report`: batch create Feishu records and write back sqlite status.
 - Optional `--max-rows <n>` sets total cap for one report run (default: process all matched rows).
@@ -53,6 +56,7 @@ npx tsx scripts/result_reporter.ts <subcommand> [flags]
 Subcommands:
 - `collect-start`
 - `collect-stop`
+- `stat`
 - `filter`
 - `report`
 - `retry-reset`

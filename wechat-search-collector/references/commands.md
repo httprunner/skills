@@ -86,8 +86,38 @@ WEBHOOK_RECONCILE() { (cd "$WEBHOOK_DIR" && npx tsx scripts/reconcile_webhook.ts
 ## 结果滚动到底
 - 滑动一屏：
   `ADB -s SERIAL swipe 540 1800 540 400 800`
-- 每滑动 5 次后用 ai-vision 判断是否触底：
-  `VISION plan-next --screenshot "$SCREENSHOT" --prompt "判断是否已到结果底部（是否出现底部分割线），若未到底请继续滑动"`
+- 触底判定（推荐：基于采集埋点增量，而非视觉判断）：
+  - 思路：每滑动 5 次后，用 `result-bitable-reporter stat` 查询当前 `TaskID` 的总行数是否增加；连续多次无新增则判定触底。
+  - 示例（bash 伪代码，关键点是“滑动 5 次 -> 查一次”）：
+    ```bash
+    TASK_ID="20260206001"
+    NO_PROGRESS=0
+    MAX_NO_PROGRESS=3
+
+    LAST_COUNT="$(REPORT stat --task-id "$TASK_ID")"
+    while true; do
+      for i in {1..5}; do
+        ADB -s SERIAL swipe 540 1800 540 400 --duration-ms 800
+        sleep 0.2
+      done
+
+      CUR_COUNT="$(REPORT stat --task-id "$TASK_ID")"
+      if [[ "$CUR_COUNT" == "$LAST_COUNT" ]]; then
+        NO_PROGRESS=$((NO_PROGRESS+1))
+      else
+        NO_PROGRESS=0
+        LAST_COUNT="$CUR_COUNT"
+      fi
+
+      if [[ "$NO_PROGRESS" -ge "$MAX_NO_PROGRESS" ]]; then
+        break
+      fi
+    done
+    ```
+- 触底判定（fallback：用 ai-vision 判断是否触底）：
+  - 推荐用 `assert`（二值判断更稳）：`VISION assert --screenshot "$SCREENSHOT" --prompt "<断言提示词>"`
+  - 断言提示词示例（要求只输出 JSON，且不确定时必须判定为 false）：
+    `VISION assert --screenshot "$SCREENSHOT" --prompt '判断“搜索结果列表是否已滑动到底”。满足任一即 pass=true：出现“没有更多/已到底/到底线”等文案；或底部出现明显空白且列表不再延伸/内容不再变化。若不确定必须 pass=false。仅输出JSON：{\"pass\":true|false,\"reason\":\"...\",\"evidence\":[\"...\"]}'`
 
 ## Feishu 任务拉取
 
