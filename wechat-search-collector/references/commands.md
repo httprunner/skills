@@ -11,7 +11,6 @@ AI_VISION_DIR=~/.agents/skills/ai-vision
 FEISHU_TASK_DIR=~/.agents/skills/feishu-bitable-task-manager
 RESULT_REPORTER_DIR=~/.agents/skills/result-bitable-reporter
 PIRACY_DIR=~/.agents/skills/piracy-handler
-WEBHOOK_DIR=~/.agents/skills/group-webhook-dispatch
 
 ADB() { (cd "$ANDROID_ADB_DIR" && npx tsx scripts/adb_helpers.ts "$@"); }
 VISION() { (cd "$AI_VISION_DIR" && npx tsx scripts/ai_vision.ts "$@"); }
@@ -20,8 +19,8 @@ REPORT() { (cd "$RESULT_REPORTER_DIR" && npx tsx scripts/result_reporter.ts "$@"
 PIRACY_DETECT() { (cd "$PIRACY_DIR" && npx tsx scripts/piracy_detect.ts "$@"); }
 PIRACY_CREATE_SUBTASKS() { (cd "$PIRACY_DIR" && npx tsx scripts/piracy_create_subtasks.ts "$@"); }
 PIRACY_UPSERT_WEBHOOK_PLANS() { (cd "$PIRACY_DIR" && npx tsx scripts/piracy_upsert_webhook_plans.ts "$@"); }
-WEBHOOK_DISPATCH() { (cd "$WEBHOOK_DIR" && npx tsx scripts/dispatch_webhook.ts "$@"); }
-WEBHOOK_RECONCILE() { (cd "$WEBHOOK_DIR" && npx tsx scripts/reconcile_webhook.ts "$@"); }
+WEBHOOK_DISPATCH() { (cd "$PIRACY_DIR" && npx tsx scripts/dispatch_webhook.ts "$@"); }
+WEBHOOK_RECONCILE() { (cd "$PIRACY_DIR" && npx tsx scripts/reconcile_webhook.ts "$@"); }
 ```
 
 - `TASK_ID` 必须为数字（与 sqlite `TaskID` 列一致）。
@@ -161,7 +160,7 @@ WEBHOOK_RECONCILE() { (cd "$WEBHOOK_DIR" && npx tsx scripts/reconcile_webhook.ts
   `PIRACY_CREATE_SUBTASKS --task-id TASK_ID`
   `PIRACY_UPSERT_WEBHOOK_PLANS --task-id TASK_ID`
 
-## Group 任务后置（group-webhook-dispatch）
+## Group 任务后置（piracy-handler）
 - Group 内任务完成后（个人页/合集/锚点等）触发 ready 检查与 webhook 推送：
   `export FEISHU_APP_ID=...`
   `export FEISHU_APP_SECRET=...`

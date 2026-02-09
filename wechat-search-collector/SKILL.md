@@ -93,7 +93,7 @@ cd ~/.agents/skills/wechat-search-collector
 - 每个关键词搜索前确认仍在该账号个人页；若误退出则重进个人页后继续。
 
 ### 7. 场景后置处理
-- 个人页任务结束并进入终态（`success/error`）后，若任务存在 `GroupID`，调用 `group-webhook-dispatch` 做“是否就绪 + webhook 推送”。
+- 个人页任务结束并进入终态（`success/error`）后，若任务存在 `GroupID`，调用 `piracy-handler` 做“是否就绪 + webhook 推送”。
 
 ## 任务结束后的收尾逻辑
 - 若 `claim` 未获取任务，直接结束不做收尾。

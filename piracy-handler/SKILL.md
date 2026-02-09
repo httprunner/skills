@@ -1,23 +1,15 @@
 ---
 name: piracy-handler
-description: 综合页搜索完成后，从本地 sqlite capture_results 聚类/阈值筛选盗版分组；并通过 feishu-bitable-task-manager 创建子任务、通过 group-webhook-dispatch upsert webhook 计划。用于 wechat-search-collector 综合页搜索后置流程（detect.json 产出/读取、子任务创建、webhook 计划写入）。
+description: 盗版检测与后置处理编排器。Use when (1) wechat-search-collector 综合页搜索任务成功完成后，需要从本地 sqlite 聚类筛选盗版、创建子任务并写入 webhook 推送计划；(2) 个人页/合集/锚点等子任务进入终态后，需要触发 webhook 推送或按日期补偿重试。核心脚本：piracy_detect → piracy_create_subtasks → piracy_upsert_webhook_plans → dispatch_webhook / reconcile_webhook。
 ---
 
 # Piracy Handler
 
-用于“综合页搜索完成后”的后置编排：盗版检测（只读）→ 子任务创建 → webhook 计划 upsert。
+执行目录：`~/.agents/skills/piracy-handler/`
 
-## 路径约定
+## 核心流程
 
-统一安装与执行目录：`~/.agents/skills/piracy-handler/`。执行前先进入该目录：
-
-```bash
-cd ~/.agents/skills/piracy-handler
-```
-
-## Quick start
-
-在 `~/.agents/skills/piracy-handler/` 目录运行：
+### 综合页搜索后置（三步串行）
 
 ```bash
 npx tsx scripts/piracy_detect.ts --task-id <TASK_ID>
@@ -25,39 +17,40 @@ npx tsx scripts/piracy_create_subtasks.ts --task-id <TASK_ID>
 npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <TASK_ID>
 ```
 
-更完整命令与调试示例见 `references/commands.md`。
+1. **detect** — 从 sqlite `capture_results` 聚类，按采集时长/总时长比阈值筛选，输出 `~/.eval/<TaskID>/detect.json`
+2. **create_subtasks** — 为命中分组创建子任务（个人页搜索/合集视频采集/视频锚点采集）
+3. **upsert_webhook_plans** — 为命中分组写入 webhook 推送计划
 
-## Workflow（高层）
+### Webhook 触发（子任务终态后）
 
-1) 从本地 sqlite `capture_results` 读取综合页采集结果。
-2) 通过 `TaskID` 从任务状态表补齐 `BookID`（`capture_results` 不含 BookID）——委托 `feishu-bitable-task-manager`。
-3) 用 `GroupID={MapAppValue(任务App)}_{BookID}_{UserKey}` 聚类。
-4) 从原始剧单按 BookID 查询总时长，换算后计算阈值并筛选命中分组。
-5) 为命中分组创建子任务（个人页必建，合集/锚点按条件）——委托 `feishu-bitable-task-manager`。
-6) 创建/更新 `BizType=piracy_general_search` 的 webhook 推送计划——委托 `group-webhook-dispatch`。
+```bash
+npx tsx scripts/dispatch_webhook.ts --task-id <TASK_ID>
+```
 
-## I/O（默认路径约定）
+按 TaskID 解析 GroupID，检查组内所有任务是否到达终态，就绪则推送 webhook。
 
-- `piracy_detect.ts` 默认写入 `~/.eval/<TaskID>/detect.json`（避免多设备并行冲突）。
-- 未指定 `--input` 时，后续命令可用 `--task-id <TaskID>` 从 `~/.eval/<TaskID>/detect.json` 读取。
+### Webhook 补偿（按日期批量重试）
 
-## Required env
+```bash
+npx tsx scripts/reconcile_webhook.ts --date <YYYY-MM-DD>
+```
 
-- `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
-- `TASK_BITABLE_URL`（任务状态表）
-- `DRAMA_BITABLE_URL`（原始剧单/元信息表）
-- `WEBHOOK_BITABLE_URL`（推送计划表）
+扫描 pending/failed 状态的 webhook 计划，逐条重试。
 
-## Dependencies
+### 豁免检查（可选）
 
-- 调用其它 skills 时遵循各自的 `Path Convention` / `路径约定`（统一安装路径：`~/.agents/skills/<skill>/`），推荐在脚本里使用单条 subshell 执行避免 `cd` 漂移：
-  - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/bitable_task.ts ...)`
-  - `(cd ~/.agents/skills/feishu-bitable-task-manager && npx tsx scripts/drama_fetch.ts --format meta ...)`
-  - `(cd ~/.agents/skills/group-webhook-dispatch && npx tsx scripts/upsert_webhook_plan.ts ...)`
+```bash
+npx tsx scripts/whitelist_check.ts --book-id <BOOK_ID> --account-id <ACCOUNT_ID> --has-short-play-tag true
+```
 
-## Resources
+所有命令支持 `--dry-run`。完整 CLI flags、输出结构与调试示例见 `references/commands.md`。
 
-- `scripts/piracy_detect.ts`: 阈值检测（输出 JSON）
-- `scripts/piracy_create_subtasks.ts`: 子任务创建（写任务状态表）
-- `scripts/piracy_upsert_webhook_plans.ts`: webhook 计划 upsert（写推送计划表）
-- Read `references/commands.md` for field conventions and debug flags.
+## Required Env
+
+| 变量 | 用途 |
+|---|---|
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书应用凭证 |
+| `TASK_BITABLE_URL` | 任务状态表 |
+| `DRAMA_BITABLE_URL` | 剧单元信息表（detect 用） |
+| `WEBHOOK_BITABLE_URL` | 推送计划表 |
+| `CRAWLER_SERVICE_BASE_URL` | webhook 推送与豁免检查服务 |

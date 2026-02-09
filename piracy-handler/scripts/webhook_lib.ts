@@ -1,5 +1,18 @@
-import { spawnSync } from "child_process";
-import os from "os";
+import {
+  chunk,
+  dayStartMs,
+  env,
+  expandHome,
+  firstText,
+  must,
+  pickField,
+  readInput,
+  sqliteJSON,
+  toDay,
+} from "./lib";
+
+// Re-export for consumers that import from webhook_lib
+export { dayStartMs, env, expandHome, must, readInput, toDay };
 
 export type DispatchOptions = {
   groupID: string;
@@ -23,66 +36,6 @@ export type DispatchResult = {
   reason?: string;
 };
 
-export function env(name: string, def = "") {
-  const v = (process.env[name] || "").trim();
-  return v || def;
-}
-
-export function must(name: string) {
-  const v = env(name, "");
-  if (!v) throw new Error(`${name} is required`);
-  return v;
-}
-
-export function expandHome(p: string) {
-  if (!p.startsWith("~")) return p;
-  return p.replace(/^~(?=$|\/)/, os.homedir());
-}
-
-export function toDay(v: any) {
-  const s = String(v ?? "").trim();
-  if (!s) return "";
-  if (/^\d{13}$/.test(s)) {
-    const d = new Date(Number(s));
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  if (/^\d{10}$/.test(s)) {
-    const d = new Date(Number(s) * 1000);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
-}
-
-export function dayStartMs(day: string) {
-  const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return 0;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-  return d.getTime();
-}
-
-function firstText(v: any): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v.trim();
-  if (typeof v === "number") return String(v);
-  if (Array.isArray(v)) return v.map((x) => firstText(x)).filter(Boolean).join(" ").trim();
-  if (typeof v === "object") {
-    if (typeof v.text === "string") return v.text.trim();
-    if (v.value != null) return firstText(v.value);
-    return "";
-  }
-  return String(v).trim();
-}
-
-function sqliteJSON(dbPath: string, sql: string): any[] {
-  const run = spawnSync("sqlite3", ["-json", dbPath, sql], { encoding: "utf-8" });
-  if (run.status !== 0) throw new Error(`sqlite query failed: ${run.stderr || run.stdout}`);
-  const out = (run.stdout || "").trim();
-  if (!out) return [];
-  const data = JSON.parse(out);
-  return Array.isArray(data) ? data : [];
-}
-
 export function parseTaskIDs(v: any): number[] {
   if (Array.isArray(v)) {
     return Array.from(new Set(v.map((x) => Math.trunc(Number(x))).filter((n) => Number.isFinite(n) && n > 0)));
@@ -104,6 +57,8 @@ export function parseTaskIDs(v: any): number[] {
     ),
   );
 }
+
+// ---------- Feishu Bitable API ----------
 
 export type BitableRef = { appToken: string; tableID: string; viewID: string; wikiToken: string };
 
@@ -220,6 +175,8 @@ export async function batchUpdate(ctx: FeishuCtx, bitableURL: string, records: A
   }
 }
 
+// ---------- field name configs ----------
+
 function taskFields() {
   return {
     TaskID: env("TASK_FIELD_TASKID", "TaskID"),
@@ -250,6 +207,8 @@ export function webhookFields() {
     EndAt: env("WEBHOOK_FIELD_ENDAT", "EndAt"),
   };
 }
+
+// ---------- dispatch logic ----------
 
 function classifyStatuses(rows: any[], statusField: string, taskIDField: string) {
   const by: Record<string, number[]> = {};
@@ -287,13 +246,6 @@ function parseDramaInfo(raw: any) {
   } catch {
     return {};
   }
-}
-
-function pickField(row: Record<string, any>, names: string[]) {
-  for (const n of names) {
-    if (row[n] !== undefined && row[n] !== null && String(row[n]).trim() !== "") return row[n];
-  }
-  return "";
 }
 
 function collectPayloadFromSQLite(dbPath: string, taskIDs: number[]) {
@@ -369,15 +321,9 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
 
   if (!planRows.length) {
     return {
-      group_id: opts.groupID,
-      day,
-      biz_type: opts.bizType,
-      ready: false,
-      pushed: false,
-      status: "missing_plan",
-      retry_count: 0,
-      task_ids: [],
-      task_ids_by_status: {},
+      group_id: opts.groupID, day, biz_type: opts.bizType,
+      ready: false, pushed: false, status: "missing_plan",
+      retry_count: 0, task_ids: [], task_ids_by_status: {},
       reason: "webhook plan not found",
     };
   }
@@ -391,15 +337,9 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
 
   if (!taskIDs.length) {
     return {
-      group_id: opts.groupID,
-      day,
-      biz_type: opts.bizType,
-      ready: false,
-      pushed: false,
-      status: "invalid_plan",
-      retry_count: retryCount,
-      task_ids: [],
-      task_ids_by_status: {},
+      group_id: opts.groupID, day, biz_type: opts.bizType,
+      ready: false, pushed: false, status: "invalid_plan",
+      retry_count: retryCount, task_ids: [], task_ids_by_status: {},
       reason: "empty TaskIDs",
     };
   }
@@ -428,40 +368,23 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
       await batchUpdate(ctx, webhookURL, [{ record_id: recordID, fields: updateBase }]);
     }
     return {
-      group_id: opts.groupID,
-      day,
-      biz_type: opts.bizType,
-      ready: false,
-      pushed: false,
-      status: currentStatus,
-      retry_count: retryCount,
-      task_ids: taskIDs,
-      task_ids_by_status: byStatus,
+      group_id: opts.groupID, day, biz_type: opts.bizType,
+      ready: false, pushed: false, status: currentStatus,
+      retry_count: retryCount, task_ids: taskIDs, task_ids_by_status: byStatus,
       reason: "tasks_not_ready",
     };
   }
 
   const dramaInfo = parseDramaInfo(planFields[wf.DramaInfo]);
   const { records, userInfo } = collectPayloadFromSQLite(dbPath, taskIDs);
-  const payload = {
-    ...dramaInfo,
-    records,
-    UserInfo: userInfo,
-  };
-
+  const payload = { ...dramaInfo, records, UserInfo: userInfo };
   const nowMs = Date.now();
 
   if (opts.dryRun) {
     return {
-      group_id: opts.groupID,
-      day,
-      biz_type: opts.bizType,
-      ready: true,
-      pushed: false,
-      status: currentStatus,
-      retry_count: retryCount,
-      task_ids: taskIDs,
-      task_ids_by_status: byStatus,
+      group_id: opts.groupID, day, biz_type: opts.bizType,
+      ready: true, pushed: false, status: currentStatus,
+      retry_count: retryCount, task_ids: taskIDs, task_ids_by_status: byStatus,
       reason: "dry_run",
     };
   }
@@ -484,15 +407,9 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
       },
     ]);
     return {
-      group_id: opts.groupID,
-      day,
-      biz_type: opts.bizType,
-      ready: true,
-      pushed: true,
-      status: "success",
-      retry_count: 0,
-      task_ids: taskIDs,
-      task_ids_by_status: byStatus,
+      group_id: opts.groupID, day, biz_type: opts.bizType,
+      ready: true, pushed: true, status: "success",
+      retry_count: 0, task_ids: taskIDs, task_ids_by_status: byStatus,
     };
   } catch (err) {
     const next = retryCount + 1;
@@ -512,15 +429,9 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
       },
     ]);
     return {
-      group_id: opts.groupID,
-      day,
-      biz_type: opts.bizType,
-      ready: true,
-      pushed: false,
-      status: failStatus,
-      retry_count: next,
-      task_ids: taskIDs,
-      task_ids_by_status: byStatus,
+      group_id: opts.groupID, day, biz_type: opts.bizType,
+      ready: true, pushed: false, status: failStatus,
+      retry_count: next, task_ids: taskIDs, task_ids_by_status: byStatus,
       reason: String(err instanceof Error ? err.message : err),
     };
   }

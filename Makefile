@@ -10,7 +10,7 @@ SKILLS_YES ?= -y
 # Match common agents used in this repo
 SKILLS_AGENTS ?= antigravity claude-code codex opencode
 # Default skill set to install from this repo (override via `make install SKILLS=...`)
-SKILLS ?= ai-vision android-adb feishu-bitable-task-manager group-webhook-dispatch piracy-handler result-bitable-reporter wechat-search-collector
+SKILLS ?= ai-vision android-adb feishu-bitable-task-manager piracy-handler result-bitable-reporter wechat-search-collector
 
 install:
 	@echo "Installing skills into agents (canonical: $(SKILLS_HOME))..."

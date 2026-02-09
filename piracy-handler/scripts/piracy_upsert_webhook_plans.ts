@@ -13,7 +13,7 @@ function parseCLI(argv: string[]): CLIOptions {
   const program = new Command();
   program
     .name("piracy_upsert_webhook_plans")
-    .description("Upsert webhook plans for detected groups (delegates to group-webhook-dispatch)")
+    .description("Upsert webhook plans for detected piracy groups")
     .option("--input <path>", "Detect output JSON file (use - for stdin)")
     .option("--task-id <id>", "Parent task TaskID; use default ~/.eval/<TaskID>/detect.json when --input omitted")
     .option("--biz-type <name>", "BizType", "piracy_general_search")

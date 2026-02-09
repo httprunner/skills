@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import path from "path";
 import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskCreate, runTaskFetch } from "./lib";
 
 type CLIOptions = {

@@ -1,9 +1,25 @@
 #!/usr/bin/env node
-import { spawnSync } from "child_process";
 import { Command } from "commander";
 import path from "path";
 import fs from "fs";
-import { dayStartMs, defaultDetectPath, ensureDir, env, expandHome, must, parsePositiveInt, toDay } from "./lib";
+import {
+  chunk,
+  dayStartMs,
+  defaultDetectPath,
+  ensureDir,
+  env,
+  expandHome,
+  firstText,
+  must,
+  parsePositiveInt,
+  pickField,
+  runDramaFetchMeta,
+  runTaskFetch,
+  sqliteJSON,
+  toDay,
+  toNumber,
+  type TaskRow,
+} from "./lib";
 
 type CLIOptions = {
   taskId: string;
@@ -14,17 +30,6 @@ type CLIOptions = {
   app?: string;
   bookId?: string;
   date?: string;
-};
-
-type TaskRow = {
-  task_id: number;
-  app: string;
-  params: string;
-  book_id: string;
-  user_id: string;
-  user_name: string;
-  date: string;
-  group_id: string;
 };
 
 function parseCLI(argv: string[]): CLIOptions {
@@ -44,15 +49,6 @@ function parseCLI(argv: string[]): CLIOptions {
     .showSuggestionAfterError();
   program.parse(argv);
   return program.opts<CLIOptions>();
-}
-
-function toNumber(v: any, d = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : d;
-}
-
-function parseTaskID(raw: any) {
-  return parsePositiveInt(raw, "task id");
 }
 
 type LogLevel = "silent" | "error" | "info" | "debug";
@@ -83,55 +79,11 @@ function createLogger(level: LogLevel, stream: NodeJS.WriteStream) {
   };
 }
 
-// ---------- sqlite ----------
-function sqliteJSON(dbPath: string, sql: string): any[] {
-  const run = spawnSync("sqlite3", ["-json", dbPath, sql], {
-    encoding: "utf-8",
-    maxBuffer: 100 * 1024 * 1024,
-  });
-  if (run.error) throw run.error;
-  if (run.status !== 0) {
-    let msg = String(run.stderr || run.stdout || "unknown error");
-    if (msg.length > 2000) msg = msg.slice(0, 2000) + "...(truncated)";
-    throw new Error(`sqlite query failed: ${msg}`);
-  }
-  const out = (run.stdout || "").trim();
-  if (!out) return [];
-  try {
-    const data = JSON.parse(out);
-    return Array.isArray(data) ? data : [];
-  } catch (err) {
-    // ignore non-json noise? or throw?
-    // sqlite3 -json should return valid json
-    return [];
-  }
-}
-
 function sqliteTableColumns(dbPath: string, table: string): string[] {
   const rows = sqliteJSON(dbPath, `PRAGMA table_info(${table});`);
   return rows
     .map((r) => String(r?.name || "").trim())
     .filter(Boolean);
-}
-
-function pickField(row: Record<string, any>, names: string[]) {
-  for (const n of names) {
-    if (row[n] !== undefined && row[n] !== null && String(row[n]).trim() !== "") return row[n];
-  }
-  return "";
-}
-
-function firstText(v: any): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v.trim();
-  if (typeof v === "number") return String(v);
-  if (Array.isArray(v)) return v.map((x) => firstText(x)).filter(Boolean).join(" ").trim();
-  if (typeof v === "object") {
-    if (typeof v.text === "string") return v.text.trim();
-    if (v.value != null) return firstText(v.value);
-    return "";
-  }
-  return String(v).trim();
 }
 
 function normalizeDurationSec(v: any): number {
@@ -168,66 +120,9 @@ const DURATION_FIELDS = [
   "itemDuration",
 ] as const;
 
-// ---------- feishu-bitable-task-manager (task table) ----------
-function taskManagerDir() {
-  return path.resolve(__dirname, "../../feishu-bitable-task-manager");
-}
-
-function runTaskFetch(args: string[]) {
-  const run = spawnSync("npx", ["tsx", "scripts/bitable_task.ts", "fetch", "--log-json", "--jsonl", ...args], {
-    cwd: taskManagerDir(),
-    encoding: "utf-8",
-    env: process.env,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  if (run.status !== 0) throw new Error(`bitable-task fetch failed: ${run.stderr || run.stdout}`);
-  const out = String(run.stdout || "");
-  const tasks: TaskRow[] = [];
-  for (const line of out.split("\n")) {
-    const s = line.trim();
-    if (!s) continue;
-    try {
-      const obj = JSON.parse(s);
-      if (obj?.msg === "task" && obj?.task) tasks.push(obj.task as TaskRow);
-    } catch {
-      // ignore non-json noise
-    }
-  }
-  return tasks;
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-
-function runDramaFetchMeta(args: string[]) {
-  const run = spawnSync("npx", ["tsx", "scripts/drama_fetch.ts", "--format", "meta", ...args], {
-    cwd: taskManagerDir(),
-    encoding: "utf-8",
-    env: process.env,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  if (run.status !== 0) throw new Error(`drama-fetch meta failed: ${run.stderr || run.stdout}`);
-  const out = String(run.stdout || "");
-  const rows: Record<string, string>[] = [];
-  for (const line of out.split("\n")) {
-    const s = line.trim();
-    if (!s) continue;
-    try {
-      const obj = JSON.parse(s);
-      if (obj && typeof obj === "object") rows.push(obj as any);
-    } catch {
-      // ignore
-    }
-  }
-  return rows;
-}
-
 async function main() {
   const args = parseCLI(process.argv);
-  const taskID = parseTaskID(args.taskId);
+  const taskID = parsePositiveInt(args.taskId, "task id");
   const threshold = toNumber(args.threshold, 0.5);
   const logLevel = parseLogLevel(args.logLevel);
   const logger = createLogger(logLevel, process.stderr);
@@ -274,7 +169,6 @@ async function main() {
     invalid_drama_duration_book_ids: [] as string[],
     groups_above_threshold: 0,
   };
-
 
   const taskIDSet = new Set<number>();
   for (const row of rawRows) {
@@ -382,15 +276,6 @@ async function main() {
   });
 
   // fetch drama meta by book id (via feishu-bitable-task-manager)
-  const dramaFields = {
-    bookID: env("DRAMA_FIELD_BOOKID", "短剧id"),
-    name: env("DRAMA_FIELD_NAME", "短剧名"),
-    durationMin: env("DRAMA_FIELD_DURATION_MIN", "短剧总时长（分钟）"),
-    episodeCount: env("DRAMA_FIELD_EPISODE_COUNT", "集数"),
-    rightsProtectionScenario: env("DRAMA_FIELD_RIGHTS_PROTECTION_SCENARIO", "维权场景"),
-    priority: env("DRAMA_FIELD_PRIORITY", "优先级"),
-  };
-
   const bookIDs = Array.from(new Set(Array.from(groups.values()).map((g) => g.book_id))).filter(Boolean);
   const dramaMap = new Map<
     string,

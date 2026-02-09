@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import fs from "fs";
 import {
   andFilter,
   batchCreate,
@@ -14,6 +13,7 @@ import {
   must,
   orFilter,
   parseTaskIDs,
+  readInput,
   searchRecords,
   webhookFields,
 } from "./webhook_lib";
@@ -26,7 +26,6 @@ type CLIOptions = {
   taskId?: string;
   dramaInfo?: string;
   dryRun: boolean;
-  logLevel: string;
 };
 
 type UpsertItem = {
@@ -36,12 +35,6 @@ type UpsertItem = {
   task_ids: number[];
   drama_info?: string; // JSON string
 };
-
-function readInput(pathArg: string): string {
-  const p = String(pathArg || "").trim();
-  if (!p || p === "-") return fs.readFileSync(0, "utf-8");
-  return fs.readFileSync(expandHome(p), "utf-8");
-}
 
 function parseItems(inputText: string): UpsertItem[] {
   const txt = String(inputText || "").trim();
@@ -80,7 +73,6 @@ function parseCLI(argv: string[]): CLIOptions {
     .option("--task-id <csv>", "TaskID(s), comma-separated (e.g. 111 or 111,222,333)")
     .option("--drama-info <json>", "DramaInfo JSON string")
     .option("--dry-run", "Compute only, do not write records")
-    .option("--log-level <level>", "Log level: silent|error|info|debug", "info")
     .showHelpAfterError()
     .showSuggestionAfterError();
   program.parse(argv);
@@ -212,6 +204,6 @@ async function main() {
 
 main().catch((err) => {
   const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`[group-webhook-dispatch] ${msg}\n`);
+  process.stderr.write(`[piracy-handler] ${msg}\n`);
   process.exit(1);
 });
