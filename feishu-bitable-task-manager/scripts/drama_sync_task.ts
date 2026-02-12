@@ -133,7 +133,14 @@ function validSourceItem(item: SourceItem) {
 
 function normalizeActor(actor: string) {
   if (!actor) return "";
-  const replaced = actor.replace(/[，,、;；/]+/g, " ");
+  let s = actor.trim();
+  // Strip JSON-like array wrapping: ["a","b"] or ["a" "b"]
+  if (s.startsWith("[") && s.endsWith("]")) {
+    s = s.slice(1, -1);
+  }
+  // Remove surrounding quotes and escaped quotes
+  s = s.replace(/\\?"/g, "");
+  const replaced = s.replace(/[，,、;；/]+/g, " ");
   return replaced.replace(/\s+/g, " ").trim();
 }
 
@@ -142,7 +149,7 @@ function normalizeTitleForCompare(value: string) {
   return value.replace(/[\p{P}\p{S}\s]+/gu, "").trim();
 }
 
-function buildParamsListPayload(src: SourceItem) {
+function buildParamsListValues(src: SourceItem): string[] {
   const values: string[] = [];
   const seen = new Set<string>();
   const push = (value: string, compareKey?: string) => {
@@ -161,7 +168,11 @@ function buildParamsListPayload(src: SourceItem) {
   const paidTitle = src.paidTitle.trim();
   const paidKey = normalizeTitleForCompare(paidTitle);
   if (paidTitle && paidKey && paidKey !== titleKey) push(paidTitle, paidKey);
-  return JSON.stringify(values);
+  return values;
+}
+
+function buildParamsListPayload(src: SourceItem) {
+  return JSON.stringify(buildParamsListValues(src));
 }
 
 async function resolveBitableRef(baseURL: string, token: string, ref: BitableRef) {
@@ -430,6 +441,7 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
   const derived: Array<{ app: string; scene: string; date: string; status: string; extra: string; book_id: string; params: string }> = [];
   let filtered = 0;
   const useParamsList = Boolean(opts.paramsList);
+  const titleOnly = Boolean(opts.titleOnly);
   for (const fieldsRaw of items) {
     const src = extractSourceItem(fieldsRaw, sourceFieldMap);
     if (!validSourceItem(src)) continue;
@@ -446,19 +458,9 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
       });
       continue;
     }
-    derived.push({
-      app: opts.app,
-      scene: opts.scene,
-      date: opts.date,
-      status: opts.status,
-      extra: opts.extra,
-      book_id: src.bid,
-      params: src.title,
-    });
-    if (opts.titleOnly) continue;
-
-    const actor = normalizeActor(src.actor);
-    if (actor) {
+    // Default and --params-split: one task per search term
+    const terms = titleOnly ? [src.title.trim()].filter(Boolean) : buildParamsListValues(src);
+    for (const term of terms) {
       derived.push({
         app: opts.app,
         scene: opts.scene,
@@ -466,18 +468,7 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
         status: opts.status,
         extra: opts.extra,
         book_id: src.bid,
-        params: actor,
-      });
-    }
-    if (src.paidTitle && normalizeTitleForCompare(src.paidTitle) !== normalizeTitleForCompare(src.title)) {
-      derived.push({
-        app: opts.app,
-        scene: opts.scene,
-        date: opts.date,
-        status: opts.status,
-        extra: opts.extra,
-        book_id: src.bid,
-        params: src.paidTitle,
+        params: term,
       });
     }
   }
@@ -583,14 +574,17 @@ async function runCreateOrSync(opts: any) {
     }
   }
 
-  const fixedOpts = { ...opts, scene: "综合页搜索", date: "Today", status: "pending" };
+  const userDate = (opts.date || "").trim();
+  const isExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(userDate);
+  const dateFilter = isExplicitDate ? userDate : "Today";
+  const createDate = isExplicitDate ? userDate : todayDateString();
+  const fixedOpts = { ...opts, scene: "综合页搜索", date: dateFilter, status: "pending" };
   const { derived, filtered } = deriveTasksFromSource(sourceFields, sourceFieldMap, fixedOpts);
   let existingBookIDs = new Set<string>();
   const skipExisting = Boolean(opts.skipExisting);
   if (skipExisting) {
     existingBookIDs = await loadExistingBookIDs(baseURL, token, taskRef, fieldsMap, fixedOpts, pageSize, useView);
   }
-  const createDate = todayDateString();
   let skipped = 0;
   const records = derived
     .filter((item) => {
@@ -641,7 +635,9 @@ async function main() {
     .option("--app <app>", "Task app", "com.smile.gifmaker")
     .option("--extra <extra>", "Task extra", "")
     .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
-    .option("--skip-existing", "Skip creating tasks when BookID already exists for Today")
+    .option("--params-split", "Create one task per search term (短剧名, 主角名, 付费剧名) with dedup")
+    .option("--date <date>", "Task date in YYYY-MM-DD format (default: today)")
+    .option("--skip-existing", "Skip creating tasks when BookID already exists for the target date")
     .option("--bid-field <name>", "Source field name for BID")
     .option("--title-field <name>", "Source field name for 短剧名")
     .option("--scene-field <name>", "Source field name for 维权场景")
