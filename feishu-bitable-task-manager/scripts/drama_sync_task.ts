@@ -441,7 +441,7 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
   const derived: Array<{ app: string; scene: string; date: string; status: string; extra: string; book_id: string; params: string }> = [];
   let filtered = 0;
   const useParamsList = Boolean(opts.paramsList);
-  const titleOnly = Boolean(opts.titleOnly);
+  const useParamsSplit = Boolean(opts.paramsSplit);
   for (const fieldsRaw of items) {
     const src = extractSourceItem(fieldsRaw, sourceFieldMap);
     if (!validSourceItem(src)) continue;
@@ -458,8 +458,8 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
       });
       continue;
     }
-    // Default and --params-split: one task per search term
-    const terms = titleOnly ? [src.title.trim()].filter(Boolean) : buildParamsListValues(src);
+    // --params-split: one task per search term; default: title only
+    const terms = useParamsSplit ? buildParamsListValues(src) : [src.title.trim()].filter(Boolean);
     for (const term of terms) {
       derived.push({
         app: opts.app,
@@ -643,7 +643,6 @@ async function main() {
     .option("--scene-field <name>", "Source field name for 维权场景")
     .option("--actor-field <name>", "Source field name for 主角名")
     .option("--paid-field <name>", "Source field name for 付费剧名")
-    .option("--title-only", "Only create tasks for drama title")
     .option("--priority <value>", "Optional Priority filter (single value or comma-separated list)")
     .option("--priority-field <name>", "Preferred source field name for Priority")
     .helpOption(true);
