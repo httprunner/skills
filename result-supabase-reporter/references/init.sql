@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS capture_results (
   user_auth_entity text,
   tags          text,
   task_id       bigint,
+  book_id       text,
   extra         text,
   like_count    integer,
   view_count    integer,
@@ -38,8 +39,14 @@ CREATE TABLE IF NOT EXISTS capture_results (
   CONSTRAINT uq_task_item UNIQUE (task_id, item_id)
 );
 
+-- Backward-compatible migration for existing tables
+ALTER TABLE capture_results
+  ADD COLUMN IF NOT EXISTS book_id text;
+
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_capture_results_task_id ON capture_results (task_id);
+CREATE INDEX IF NOT EXISTS idx_capture_results_book_id ON capture_results (book_id);
+CREATE INDEX IF NOT EXISTS idx_capture_results_user_id ON capture_results (user_id);
 CREATE INDEX IF NOT EXISTS idx_capture_results_app     ON capture_results (app);
 CREATE INDEX IF NOT EXISTS idx_capture_results_item_id ON capture_results (item_id);
 CREATE INDEX IF NOT EXISTS idx_capture_results_scene   ON capture_results (scene);
