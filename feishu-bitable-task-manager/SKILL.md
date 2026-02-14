@@ -121,6 +121,7 @@ Params mode flags (mutually exclusive):
 
 - `--params-list` — one task per source row; `Params` is a JSON array of all search terms, e.g. `["好一个乖乖女","段休冥 鹿鸣于"]`.
 - `--params-split` — one task **per search term**; uses the same dedup logic as `--params-list` but creates separate tasks, each with a plain string `Params`.
+- `--params-actor` — one task per source row; `Params` uses only `主角名`.
 
 ## Resources
 

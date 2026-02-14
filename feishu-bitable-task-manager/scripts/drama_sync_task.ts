@@ -124,8 +124,12 @@ function extractSourceItem(fieldsRaw: Record<string, any>, map: SourceFieldMap):
   };
 }
 
-function validSourceItem(item: SourceItem) {
+function validSourceItem(item: SourceItem, opts?: { paramsActor?: boolean }) {
   if (!item.bid || item.bid === "暂无") return false;
+  if (opts?.paramsActor) {
+    if (!normalizeActor(item.actor)) return false;
+    return true;
+  }
   if (!item.title) return false;
   if (!item.rightsScene) return false;
   return true;
@@ -442,10 +446,25 @@ function deriveTasksFromSource(items: Array<Record<string, any>>, sourceFieldMap
   let filtered = 0;
   const useParamsList = Boolean(opts.paramsList);
   const useParamsSplit = Boolean(opts.paramsSplit);
+  const useParamsActor = Boolean(opts.paramsActor);
   for (const fieldsRaw of items) {
     const src = extractSourceItem(fieldsRaw, sourceFieldMap);
-    if (!validSourceItem(src)) continue;
+    if (!validSourceItem(src, { paramsActor: useParamsActor })) continue;
     filtered++;
+    if (useParamsActor) {
+      const actor = normalizeActor(src.actor);
+      if (!actor) continue;
+      derived.push({
+        app: opts.app,
+        scene: opts.scene,
+        date: opts.date,
+        status: opts.status,
+        extra: opts.extra,
+        book_id: src.bid,
+        params: actor,
+      });
+      continue;
+    }
     if (useParamsList) {
       derived.push({
         app: opts.app,
@@ -520,6 +539,11 @@ async function runCreateOrSync(opts: any) {
   const baseURL = Env("FEISHU_BASE_URL", DefaultBaseURL);
   const fieldsMap = LoadTaskFieldsFromEnv();
   const sourceFieldMap = normalizeSourceFieldMap(opts);
+  const modeFlags = [Boolean(opts.paramsList), Boolean(opts.paramsSplit), Boolean(opts.paramsActor)].filter(Boolean).length;
+  if (modeFlags > 1) {
+    errLogger.error("invalid options", { hint: "--params-list, --params-split, --params-actor are mutually exclusive" });
+    process.exit(2);
+  }
   let taskRef: BitableRef;
   try {
     taskRef = ParseBitableURL(taskURL);
@@ -636,6 +660,7 @@ async function main() {
     .option("--extra <extra>", "Task extra", "")
     .option("--params-list", "Store [短剧名, 主角名, 付费剧名] as a JSON list in Params (one task per source row)")
     .option("--params-split", "Create one task per search term (短剧名, 主角名, 付费剧名) with dedup")
+    .option("--params-actor", "Store only 主角名 in Params (one task per source row)")
     .option("--date <date>", "Task date in YYYY-MM-DD format (default: today)")
     .option("--skip-existing", "Skip creating tasks when BookID already exists for the target date")
     .option("--bid-field <name>", "Source field name for BID")
