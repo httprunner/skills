@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { env, must } from "./webhook_lib";
+import { env, must } from "./webhook/lib";
 
 type CLIOptions = {
   bookId?: string;

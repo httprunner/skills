@@ -14,7 +14,7 @@ import {
   searchRecords,
   toDay,
   webhookFields,
-} from "./webhook_lib";
+} from "./webhook/lib";
 
 type CLIOptions = {
   input?: string;

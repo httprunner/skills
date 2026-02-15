@@ -7,9 +7,9 @@ import {
   must,
   pickField,
   readInput,
-  sqliteJSON,
   toDay,
-} from "./lib";
+} from "../shared/lib";
+import { createResultSource, type ResultDataSource } from "../data/result_source";
 
 // Re-export for consumers that import from webhook_lib
 export { dayStartMs, env, expandHome, must, readInput, toDay };
@@ -19,7 +19,11 @@ export type DispatchOptions = {
   day: string;
   bizType: string;
   dryRun?: boolean;
+  dataSource?: ResultDataSource;
   dbPath?: string;
+  table?: string;
+  pageSize?: number;
+  timeoutMs?: number;
   maxRetries?: number;
 };
 
@@ -238,7 +242,7 @@ function classifyStatuses(rows: any[], statusField: string, taskIDField: string)
 
 function isTerminalStatus(s: string) {
   const x = s.toLowerCase();
-  return x === "success" || x === "failed" || x === "error";
+  return x === "success" || x === "error";
 }
 
 function allTerminal(taskRows: any[], statusField: string) {
@@ -260,10 +264,16 @@ function parseDramaInfo(raw: any) {
   }
 }
 
-function collectPayloadFromSQLite(dbPath: string, taskIDs: number[]) {
-  const inList = taskIDs.join(",");
-  if (!inList) return { records: [], userInfo: {} };
-  const rows = sqliteJSON(dbPath, `SELECT * FROM capture_results WHERE CAST(COALESCE(TaskID, task_id, 0) AS INTEGER) IN (${inList});`);
+async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: number[]) {
+  if (!taskIDs.length) return { records: [], userInfo: {} };
+  const source = createResultSource({
+    dataSource: opts.dataSource || "sqlite",
+    dbPath: opts.dbPath,
+    supabaseTable: opts.table,
+    pageSize: opts.pageSize,
+    timeoutMs: opts.timeoutMs,
+  });
+  const rows = await source.fetchByTaskIDs(taskIDs);
   const userInfo = {
     UserID: String(pickField(rows[0] || {}, ["UserID", "user_id"]) || "").trim(),
     UserName: String(pickField(rows[0] || {}, ["UserName", "user_name"]) || "").trim(),
@@ -308,7 +318,6 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   const webhookURL = must("WEBHOOK_BITABLE_URL");
   const crawlerBaseURL = must("CRAWLER_SERVICE_BASE_URL");
   const baseURL = env("FEISHU_BASE_URL", "https://open.feishu.cn").replace(/\/+$/, "");
-  const dbPath = expandHome(opts.dbPath || env("TRACKING_STORAGE_DB_PATH", "~/.eval/records.sqlite"));
   const maxRetries = opts.maxRetries ?? 3;
 
   const token = await getTenantToken(baseURL, appID, appSecret);
@@ -398,7 +407,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   }
 
   const dramaInfo = parseDramaInfo(planFields[wf.DramaInfo]);
-  const { records, userInfo } = collectPayloadFromSQLite(dbPath, taskIDs);
+  const { records, userInfo } = await collectPayloadFromResultSource(opts, taskIDs);
   const payload = { ...dramaInfo, records, UserInfo: userInfo };
   const nowMs = Date.now();
 

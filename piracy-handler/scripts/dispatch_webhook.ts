@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { parseOptionalPositiveInt } from "./cli";
-import { processOneGroup, resolveGroupFromTaskID } from "./webhook_lib";
+import { parseOptionalPositiveInt } from "./shared/cli";
+import { processOneGroup, resolveGroupFromTaskID } from "./webhook/lib";
+import { buildResultSourceOptionsFromCLI } from "./data/result_source_cli";
 
 type CLIOptions = {
   taskId?: string;
@@ -9,7 +10,11 @@ type CLIOptions = {
   date?: string;
   bizType: string;
   dryRun: boolean;
+  dataSource: string;
   dbPath?: string;
+  table?: string;
+  pageSize?: string;
+  timeoutMs?: string;
   maxRetries?: string;
 };
 
@@ -23,7 +28,11 @@ function parseCLI(argv: string[]): CLIOptions {
     .option("--date <yyyy-mm-dd>", "Capture day (default: today)")
     .option("--biz-type <name>", "BizType", "piracy_general_search")
     .option("--dry-run", "Compute only, do not call webhook or write back")
+    .option("--data-source <type>", "Result source: sqlite|supabase", "sqlite")
     .option("--db-path <path>", "SQLite path override")
+    .option("--table <name>", "Supabase table name")
+    .option("--page-size <n>", "Supabase page size", "1000")
+    .option("--timeout-ms <n>", "Supabase timeout in milliseconds", "30000")
     .option("--max-retries <num>", "Max retries override")
     .showHelpAfterError()
     .showSuggestionAfterError();
@@ -37,6 +46,7 @@ async function main() {
   const taskIDRaw = String(args.taskId || "").trim();
   const groupIDRaw = String(args.groupId || "").trim();
   const dryRun = Boolean(args.dryRun);
+  const source = buildResultSourceOptionsFromCLI(args);
 
   let groupID = groupIDRaw;
   let day = String(args.date || "").trim();
@@ -66,7 +76,11 @@ async function main() {
     day,
     bizType,
     dryRun,
-    dbPath: String(args.dbPath || "").trim() || undefined,
+    dataSource: source.dataSource,
+    dbPath: source.dbPath,
+    table: source.supabaseTable,
+    pageSize: source.pageSize,
+    timeoutMs: source.timeoutMs,
     maxRetries: parseOptionalPositiveInt(args.maxRetries, "--max-retries"),
   });
 

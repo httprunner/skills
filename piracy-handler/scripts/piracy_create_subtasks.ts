@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskCreate, runTaskFetch } from "./lib";
+import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskCreate, runTaskFetch } from "./shared/lib";
 
 type CLIOptions = {
   input?: string;

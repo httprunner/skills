@@ -141,7 +141,7 @@ export type TaskRow = {
 };
 
 export function taskManagerDir() {
-  return path.resolve(__dirname, "../../feishu-bitable-task-manager");
+  return path.resolve(__dirname, "../../../feishu-bitable-task-manager");
 }
 
 export function parseTaskManagerFetchOutput(stdout: string): TaskRow[] {
@@ -186,7 +186,7 @@ export function runWebhookPlanUpsert(jsonl: string, dryRun: boolean, bizType: st
   const args = ["tsx", "scripts/upsert_webhook_plan.ts", "--input", "-", "--biz-type", bizType];
   if (dryRun) args.push("--dry-run");
   const run = spawnSync("npx", args, {
-    cwd: path.resolve(__dirname, ".."),
+    cwd: path.resolve(__dirname, "../.."),
     encoding: "utf-8",
     env: process.env,
     input: jsonl,

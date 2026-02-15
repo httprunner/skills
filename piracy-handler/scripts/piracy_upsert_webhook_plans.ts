@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskFetch, runWebhookPlanUpsert } from "./lib";
+import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskFetch, runWebhookPlanUpsert } from "./shared/lib";
 
 type CLIOptions = {
   input?: string;
@@ -114,7 +114,7 @@ async function main() {
       RightsProtectionScenario: String(drama?.rights_protection_scenario || "").trim(),
       TotalDuration: String(drama?.total_duration_sec ?? ""),
       CaptureDuration: String(g?.capture_duration_sec ?? ""),
-      GeneralSearchRatio: Number(Number(g?.ratio || 0).toFixed(6)),
+      GeneralSearchRatio: `${(Number(g?.ratio || 0) * 100).toFixed(2)}%`,
     };
 
     upsertItems.push({

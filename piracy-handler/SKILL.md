@@ -1,68 +1,92 @@
 ---
 name: piracy-handler
-description: 盗版检测与后置处理编排器。Use when (1) wechat-search-collector 综合页搜索任务成功完成后，需要从本地 sqlite 聚类筛选盗版、创建子任务并写入 webhook 推送计划；(2) 个人页/合集/锚点等子任务进入终态后，需要触发 webhook 推送或按日期补偿重试。核心脚本：piracy_detect → piracy_create_subtasks → piracy_upsert_webhook_plans → dispatch_webhook / reconcile_webhook。
+description: 盗版检测与后置处理编排器。Use when wechat-search-collector 综合页任务完成后，需要基于 capture_results 进行盗版检测、创建子任务、写入 webhook 计划，或在子任务终态后执行 webhook dispatch/reconcile。支持 sqlite/supabase 二选一作为 capture_results 数据源。
 ---
 
 # Piracy Handler
 
 执行目录：`~/.agents/skills/piracy-handler/`
 
-## 核心流程
+## 1) 主流程
 
-### 综合页搜索后置（三步串行）
+### A. 综合页后置（推荐）
 
 ```bash
-npx tsx scripts/piracy_detect.ts --task-id <TASK_ID>
-npx tsx scripts/piracy_create_subtasks.ts --task-id <TASK_ID>
-npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <TASK_ID>
+npx tsx scripts/piracy_detect.ts --task-ids <TASK_ID[,TASK_ID2,...]> --data-source <sqlite|supabase>
+npx tsx scripts/piracy_create_subtasks.ts --task-id <PARENT_TASK_ID>
+npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <PARENT_TASK_ID>
 ```
 
-1. **detect** — 从 sqlite `capture_results` 聚类，按采集时长/总时长比阈值筛选，输出 `~/.eval/<TaskID>/detect.json`
-2. **create_subtasks** — 为命中分组创建子任务（个人页搜索/合集视频采集/视频锚点采集）
-3. **upsert_webhook_plans** — 为命中分组写入 webhook 推送计划
-
-### Supabase 多任务后置（一条命令）
+### B. 一条命令全流程（兼容入口）
 
 ```bash
 npx tsx scripts/piracy_pipeline_supabase.ts --task-ids <TASK_ID_1,TASK_ID_2,...>
 ```
 
-适用于同一 `BookID` 的多个综合页任务分布在不同节点执行的场景。该脚本会：
-1. 从 Supabase `capture_results` 读取指定 `task_id` 列表数据
-2. 复用当前 `piracy_detect` 一致的检测逻辑产出 `detect.json`
-3. 调用现有 `piracy_create_subtasks` 与 `piracy_upsert_webhook_plans`
+说明：`piracy_pipeline_supabase.ts` 保留为兼容壳，内部复用 detect runner + create/upsert。
 
-### Webhook 触发（子任务终态后）
+### C. webhook 触发与补偿
 
 ```bash
-npx tsx scripts/dispatch_webhook.ts --task-id <TASK_ID>
+npx tsx scripts/dispatch_webhook.ts --task-id <TASK_ID> --data-source <sqlite|supabase>
+npx tsx scripts/reconcile_webhook.ts --date <YYYY-MM-DD> --data-source <sqlite|supabase>
 ```
 
-按 TaskID 解析 GroupID，检查组内所有任务是否到达终态，就绪则推送 webhook。
+## 2) 职责边界
 
-### Webhook 补偿（按日期批量重试）
+- `capture_results` 读取：支持 `sqlite|supabase`
+- 任务表读取/子任务创建：当前仍走飞书任务表（`TASK_BITABLE_URL`）
+- 剧单元数据：当前仍走飞书剧目表（`DRAMA_BITABLE_URL`）
+- webhook 计划读写：当前仍走飞书 webhook 表（`WEBHOOK_BITABLE_URL`）
 
-```bash
-npx tsx scripts/reconcile_webhook.ts --date <YYYY-MM-DD>
-```
+## 3) 关键脚本
 
-扫描 pending/failed 状态的 webhook 计划，逐条重试。
+- `scripts/piracy_detect.ts`
+作用：按 TaskID（或从飞书筛选）生成 detect.json；支持 sqlite/supabase 数据源；检测仅纳入 `status=success` 的综合页任务结果，ratio 采用 `>=` 阈值判定。
+- `scripts/piracy_create_subtasks.ts`
+作用：基于 detect.json 创建子任务（个人页/合集/锚点）。
+- `scripts/piracy_upsert_webhook_plans.ts`
+作用：基于 detect.json upsert webhook 计划。
+- `scripts/dispatch_webhook.ts`
+作用：单 group webhook 推送（按 task-id 或 group-id 触发）。
+- `scripts/reconcile_webhook.ts`
+作用：按日期重试 pending/failed webhook 计划。
 
-### 豁免检查（可选）
+## 4) 公共模块（重构后）
 
-```bash
-npx tsx scripts/whitelist_check.ts --book-id <BOOK_ID> --account-id <ACCOUNT_ID> --has-short-play-tag true
-```
+- `scripts/shared/lib.ts`
+通用工具函数、时间/解析、以及 task-manager/webhook-upsert 子进程桥接。
+- `scripts/shared/cli.ts`
+通用 CLI 参数解析辅助（`limit`、正整数等）。
+- `scripts/data/result_source.ts`
+统一 `capture_results` 读取接口（sqlite/supabase）。
+- `scripts/data/result_source_cli.ts`
+统一 `--data-source/--db-path/--table/--page-size/--timeout-ms` 解析。
+- `scripts/detect/task_units.ts`
+统一 `--task-ids` 与 `--from-feishu` 的任务分组逻辑。
+- `scripts/detect/core.ts`
+detect 聚合/阈值/summary 核心逻辑。
+- `scripts/detect/runner.ts`
+统一 detect 执行与输出路径策略。
+- `scripts/webhook/lib.ts`
+webhook 计划读取、状态聚合、dispatch/reconcile 核心逻辑。
 
-所有命令支持 `--dry-run`。完整 CLI flags、输出结构与调试示例见 `references/commands.md`。
+目录结构速览：`scripts/README.md`
 
-## Required Env
+## 5) 环境变量
 
 | 变量 | 用途 |
 |---|---|
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书应用凭证 |
 | `TASK_BITABLE_URL` | 任务状态表 |
-| `DRAMA_BITABLE_URL` | 剧单元信息表（detect 用） |
-| `WEBHOOK_BITABLE_URL` | 推送计划表 |
+| `DRAMA_BITABLE_URL` | 剧单元信息表（detect 仍依赖） |
+| `WEBHOOK_BITABLE_URL` | webhook 计划表 |
 | `CRAWLER_SERVICE_BASE_URL` | webhook 推送与豁免检查服务 |
-| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | `piracy_pipeline_supabase.ts` 从中心库读取采集结果 |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | `--data-source supabase` 时读取 `capture_results` |
+| `SUPABASE_RESULT_TABLE` | Supabase 结果表名（默认 `capture_results`） |
+| `TRACKING_STORAGE_DB_PATH` | sqlite 模式默认数据库路径 |
+
+## 6) 参考文档
+
+- 详细命令、参数与样例：`references/commands.md`
+- webhook ready 语义：组内任务需全部为 `success|error`（`failed` 不视为 ready）。

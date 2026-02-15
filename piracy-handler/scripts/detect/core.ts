@@ -5,7 +5,7 @@ import {
   runTaskFetch,
   toNumber,
   type TaskRow,
-} from "./lib";
+} from "../shared/lib";
 
 const TASK_ID_CANDIDATE_FIELDS = ["TaskID", "task_id"] as const;
 const USER_ALIAS_FIELDS = ["UserAlias", "user_alias"] as const;
@@ -61,7 +61,7 @@ export type DetectOutput = {
 function mapAppValue(app: string) {
   const m: Record<string, string> = {
     "com.smile.gifmaker": "快手",
-    "com.tencent.mm": "视频号",
+    "com.tencent.mm": "微信视频号",
     "com.eg.android.AlipayGphone": "支付宝",
   };
   return m[app] || app;
@@ -96,6 +96,9 @@ export function buildDetectOutput(input: BuildDetectOutputInput): DetectOutput {
     threshold,
     sqlite_rows: rawRows.length,
     resolved_task_count: 0,
+    success_task_count: 0,
+    non_success_task_ids: [] as number[],
+    skipped_rows_non_success_tasks: 0,
     unresolved_task_ids: [] as number[],
     missing_drama_meta_book_ids: [] as string[],
     invalid_drama_duration_book_ids: [] as string[],
@@ -111,13 +114,21 @@ export function buildDetectOutput(input: BuildDetectOutputInput): DetectOutput {
   const taskIDs = Array.from(taskIDSet).sort((a, b) => a - b);
 
   const taskMap = new Map<number, TaskRow>();
+  const successTaskIDs = new Set<number>();
+  const nonSuccessTaskIDs = new Set<number>();
   for (const batch of chunk(taskIDs, 50)) {
     const tasks = runTaskFetch(["--task-id", batch.join(","), "--status", "Any", "--date", "Any"]);
     for (const t of tasks) {
-      if (typeof t?.task_id === "number" && t.task_id > 0 && !taskMap.has(t.task_id)) taskMap.set(t.task_id, t);
+      if (typeof t?.task_id !== "number" || t.task_id <= 0) continue;
+      if (!taskMap.has(t.task_id)) taskMap.set(t.task_id, t);
+      const status = String(t?.status || "").trim().toLowerCase();
+      if (status === "success") successTaskIDs.add(t.task_id);
+      else nonSuccessTaskIDs.add(t.task_id);
     }
   }
   summary.resolved_task_count = taskMap.size;
+  summary.success_task_count = successTaskIDs.size;
+  summary.non_success_task_ids = Array.from(nonSuccessTaskIDs).sort((a, b) => a - b);
 
   type G = {
     group_id: string;
@@ -137,10 +148,15 @@ export function buildDetectOutput(input: BuildDetectOutputInput): DetectOutput {
 
   let rowsWithDuration = 0;
   let rowsWithoutDuration = 0;
+  let skippedRowsNonSuccessTasks = 0;
   for (let i = 0; i < rawRows.length; i++) {
     const row = rawRows[i] || {};
     const rowTaskID = Math.trunc(toNumber(pickField(row, [...TASK_ID_CANDIDATE_FIELDS]), 0));
     if (rowTaskID <= 0) continue;
+    if (!successTaskIDs.has(rowTaskID)) {
+      skippedRowsNonSuccessTasks++;
+      continue;
+    }
     const t = taskMap.get(rowTaskID);
 
     const app = String((t?.app || "") || parent.app).trim();
@@ -199,6 +215,7 @@ export function buildDetectOutput(input: BuildDetectOutputInput): DetectOutput {
   }
 
   summary.unresolved_task_ids = Array.from(unresolvedTaskIDs).sort((a, b) => a - b);
+  summary.skipped_rows_non_success_tasks = skippedRowsNonSuccessTasks;
   logger?.debug("group aggregation finished", {
     total_groups: groups.size,
     rows_with_duration: rowsWithDuration,
