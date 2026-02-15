@@ -131,6 +131,8 @@ export type TaskRow = {
   task_id: number;
   group_id: string;
   app?: string;
+  scene?: string;
+  status?: string;
   params?: string;
   book_id?: string;
   user_id?: string;

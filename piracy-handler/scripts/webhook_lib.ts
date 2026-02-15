@@ -45,6 +45,7 @@ export function parseTaskIDs(v: any): number[] {
   try {
     const j = JSON.parse(s);
     if (Array.isArray(j)) return parseTaskIDs(j);
+    if (typeof j === "string") return parseTaskIDs(j);
   } catch {
     // ignore
   }
@@ -202,6 +203,7 @@ function taskFields() {
 
 export function webhookFields() {
   return {
+    App: env("WEBHOOK_FIELD_APP", "App"),
     BizType: env("WEBHOOK_FIELD_BIZTYPE", "BizType"),
     GroupID: env("WEBHOOK_FIELD_GROUPID", "GroupID"),
     Status: env("WEBHOOK_FIELD_STATUS", "Status"),
@@ -338,12 +340,22 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
     };
   }
 
-  const plan = planRows[0];
-  const planFields = plan.fields || {};
-  const recordID = String(plan.record_id || "").trim();
+  let chosenPlan = planRows[0];
+  let chosenTaskIDs: number[] = [];
+  for (const row of planRows) {
+    const rowTaskIDs = uniqInts(parseTaskIDs((row.fields || {})[wf.TaskIDs]));
+    if (rowTaskIDs.length > 0) {
+      chosenPlan = row;
+      chosenTaskIDs = rowTaskIDs;
+      break;
+    }
+  }
+
+  const planFields = chosenPlan.fields || {};
+  const recordID = String(chosenPlan.record_id || "").trim();
   const currentStatus = firstText(planFields[wf.Status]).toLowerCase() || "pending";
   const retryCount = Math.trunc(Number(firstText(planFields[wf.RetryCount]) || "0")) || 0;
-  const taskIDs = uniqInts(parseTaskIDs(planFields[wf.TaskIDs]));
+  const taskIDs = chosenTaskIDs.length > 0 ? chosenTaskIDs : uniqInts(parseTaskIDs(planFields[wf.TaskIDs]));
 
   if (!taskIDs.length) {
     return {

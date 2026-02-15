@@ -30,9 +30,15 @@ type UpsertItem = {
   group_id: string;
   date: string; // yyyy-mm-dd
   biz_type?: string;
+  app?: string;
   task_ids: number[];
   drama_info?: string; // JSON string
 };
+
+function encodeTaskIDsByStatus(taskIDs: number[]): string {
+  const status = String(env("WEBHOOK_TASKIDS_DEFAULT_STATUS", "pending")).trim().toLowerCase() || "pending";
+  return JSON.stringify({ [status]: taskIDs });
+}
 
 function parseItems(inputText: string): UpsertItem[] {
   const txt = String(inputText || "").trim();
@@ -61,10 +67,11 @@ function normalizeItem(raw: any, defaultBizType: string): UpsertItem | null {
   const rawDate = String(raw?.date ?? raw?.day ?? "").trim();
   const date = toDay(rawDate) || rawDate;
   const bizType = String(raw?.biz_type ?? raw?.bizType ?? defaultBizType).trim() || defaultBizType;
+  const app = String(raw?.app ?? raw?.App ?? "").trim();
   const taskIDs = parseTaskIDs(raw?.task_ids ?? raw?.taskIDs ?? raw?.task_ids_json ?? raw?.taskIDsJSON ?? raw?.taskIds ?? "");
   const dramaInfo = typeof raw?.drama_info === "string" ? raw.drama_info : typeof raw?.dramaInfo === "string" ? raw.dramaInfo : "";
   if (!groupID || !date || !taskIDs.length) return null;
-  return { group_id: groupID, date, biz_type: bizType, task_ids: taskIDs, drama_info: dramaInfo || undefined };
+  return { group_id: groupID, date, biz_type: bizType, app: app || undefined, task_ids: taskIDs, drama_info: dramaInfo || undefined };
 }
 
 function normalizeDayValue(v: any): string {
@@ -181,8 +188,9 @@ async function main() {
     if (!dayMs) throw new Error(`invalid date: ${it.date}`);
     const bizType = it.biz_type || bizTypeDefault;
     const k = `${bizType}@@${day}@@${it.group_id}`;
-    const taskIDsPayload = JSON.stringify(it.task_ids);
+    const taskIDsPayload = encodeTaskIDsByStatus(it.task_ids);
     const dramaInfo = it.drama_info || "";
+    const app = String(it.app || "").trim();
 
     const exist = existingByKey.get(k);
     if (exist?.recordID) {
@@ -190,6 +198,7 @@ async function main() {
         record_id: exist.recordID,
         fields: {
           [wf.TaskIDs]: taskIDsPayload,
+          ...(app && wf.App ? { [wf.App]: app } : {}),
           ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
         },
       });
@@ -198,6 +207,7 @@ async function main() {
 
     createRows.push({
       fields: {
+        ...(app && wf.App ? { [wf.App]: app } : {}),
         [wf.BizType]: bizType,
         [wf.GroupID]: it.group_id,
         [wf.Status]: "pending",

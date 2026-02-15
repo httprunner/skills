@@ -9,6 +9,17 @@ type CLIOptions = {
   bizType: string;
 };
 
+function mapAppLabel(app: string): string {
+  const trimmed = String(app || "").trim();
+  if (!trimmed) return "";
+  const m: Record<string, string> = {
+    "com.smile.gifmaker": "快手",
+    "com.tencent.mm": "微信视频号",
+    "com.eg.android.AlipayGphone": "支付宝",
+  };
+  return m[trimmed] || trimmed;
+}
+
 function parseCLI(argv: string[]): CLIOptions {
   const program = new Command();
   program
@@ -110,6 +121,7 @@ async function main() {
       group_id: groupID,
       date: day,
       biz_type: bizType,
+      app: mapAppLabel(String(g?.app || "").trim()),
       task_ids: tids,
       drama_info: JSON.stringify(dramaInfoObj),
     });

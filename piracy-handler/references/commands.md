@@ -49,7 +49,12 @@ npx tsx scripts/piracy_detect.ts --task-id 123456 --db-path ~/.eval/records.sqli
 
 ## piracy_pipeline_supabase.ts
 
-从 Supabase 按多 TaskID 读取 `capture_results`，执行同款盗版检测，再创建子任务与 webhook 计划。
+从 Supabase 读取 `capture_results`，执行同款盗版检测，再创建子任务与 webhook 计划。
+
+支持两种入口：
+
+- 直接传 `--task-ids`（原有方式）
+- 从飞书任务状态表筛选父任务（`Scene/App/Date/Status`），并按 `BookID` 自动合并
 
 ```bash
 # 全流程（detect + create_subtasks + upsert_webhook_plans）
@@ -58,13 +63,28 @@ npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113
 # 仅做检测并预览，不写表
 npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113 --dry-run
 
+# 从飞书筛选综合页成功任务，按 BookID 合并后批量执行
+npx tsx scripts/piracy_pipeline_supabase.ts \
+  --from-feishu \
+  --task-app com.tencent.mm \
+  --task-scene 综合页搜索 \
+  --task-status success \
+  --task-date 2026-02-15 \
+  --task-limit 0
+
 # 只产出 detect.json（跳过后两步）
 npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113 --skip-create-subtasks --skip-upsert-webhook-plans
 ```
 
 | Flag | 说明 | 默认值 |
 |---|---|---|
-| `--task-ids` (必填) | 逗号分隔 TaskID 列表 | - |
+| `--task-ids` | 逗号分隔 TaskID 列表 | - |
+| `--from-feishu` | 从飞书任务状态表筛选父任务，并按 BookID 合并 | false |
+| `--task-app` | 飞书筛选：App（`--from-feishu` 时必填） | - |
+| `--task-scene` | 飞书筛选：Scene | `综合页搜索` |
+| `--task-status` | 飞书筛选：Status | `success` |
+| `--task-date` | 飞书筛选：Date（Today/Yesterday/Any/具体日期） | `Today` |
+| `--task-limit` | 飞书筛选数量上限（`0`=不限制） | `0` |
 | `--parent-task-id` | detect 输出中的父任务ID（默认取 task-ids 第一项） | 第一项 |
 | `--table` | Supabase 结果表名 | `SUPABASE_RESULT_TABLE` 或 `capture_results` |
 | `--page-size` | Supabase 分页拉取大小 | `1000` |
