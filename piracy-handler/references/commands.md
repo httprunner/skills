@@ -23,11 +23,10 @@ export SUPABASE_RESULT_TABLE="capture_results"
 ```bash
 # 指定 TaskID 列表（支持单个或多个）
 npx tsx scripts/piracy_detect.ts --task-ids 123456 --data-source sqlite
-npx tsx scripts/piracy_detect.ts --task-ids 123456,123457 --data-source supabase --table capture_results
+npx tsx scripts/piracy_detect.ts --task-ids 123456,123457 --data-source supabase --supabase-table capture_results
 
-# 从飞书筛选父任务并按 BookID 分组
+# 不传 --task-ids 时，自动按飞书条件筛选父任务并按 BookID 分组
 npx tsx scripts/piracy_detect.ts \
-  --from-feishu \
   --task-app com.tencent.mm \
   --task-scene 综合页搜索 \
   --task-status success \
@@ -38,15 +37,16 @@ npx tsx scripts/piracy_detect.ts \
 主要参数：
 
 - `--task-ids <csv>`：任务 ID 列表
-- `--from-feishu`：启用飞书筛选模式
 - `--task-app/--task-scene/--task-status/--task-date/--task-limit`：飞书筛选条件
 - `--data-source sqlite|supabase`：结果读取源（默认 `sqlite`）
-- `--db-path`：sqlite 路径（sqlite 模式）
-- `--table --page-size --timeout-ms`：Supabase 参数（supabase 模式）
+- `--sqlite-path`：sqlite 路径（sqlite 模式）
+- `--supabase-table --supabase-page-size --supabase-timeout-ms`：Supabase 参数（supabase 模式）
 - `--threshold`：盗版阈值（默认 `0.5`）
 - `--output`：输出文件路径；`-` 仅允许单 detect unit
 
-兼容参数：`--task-id`（已废弃，等价 `--task-ids <id>`）。
+筛选优先级：
+- 指定 `--task-ids` 时，优先按 TaskID 检测；
+- 未指定 `--task-ids` 时，按飞书筛选条件检测（需提供 `--task-app`）。
 
 检测语义说明：
 - 仅纳入 `status=success` 的综合页任务结果行参与聚合；

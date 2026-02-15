@@ -1,33 +1,26 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { parsePositiveInt, toNumber } from "./shared/lib";
+import { toNumber } from "./shared/lib";
 import { resolveDetectTaskUnits } from "./detect/task_units";
 import { runDetectForUnits } from "./detect/runner";
 import { buildResultSourceOptionsFromCLI } from "./data/result_source_cli";
 
 type CLIOptions = {
   taskIds?: string;
-  fromFeishu?: boolean;
   taskApp?: string;
   taskScene: string;
   taskStatus: string;
   taskDate: string;
   taskLimit: string;
-  parentTaskId?: string;
 
   dataSource: string;
-  dbPath: string;
-  table: string;
-  pageSize: string;
-  timeoutMs: string;
+  sqlitePath: string;
+  supabaseTable: string;
+  supabasePageSize: string;
+  supabaseTimeoutMs: string;
 
   threshold: string;
   output?: string;
-  app?: string;
-  bookId?: string;
-  date?: string;
-
-  taskId?: string;
 };
 
 function parseCLI(argv: string[]): CLIOptions {
@@ -36,26 +29,20 @@ function parseCLI(argv: string[]): CLIOptions {
     .name("piracy_detect")
     .description("Piracy clustering and threshold detection (sqlite/supabase)")
     .option("--task-ids <csv>", "Comma-separated TaskID list (single or multiple)")
-    .option("--from-feishu", "Select parent tasks from task-status Bitable, then merge by BookID")
     .option("--task-app <app>", "Feishu task filter: App")
     .option("--task-scene <scene>", "Feishu task filter: Scene", "综合页搜索")
     .option("--task-status <status>", "Feishu task filter: Status", "success")
     .option("--task-date <date>", "Feishu task filter: Date preset/value (Today/Yesterday/Any/YYYY-MM-DD)", "Today")
     .option("--task-limit <n>", "Feishu task fetch limit (0 = no cap)", "0")
-    .option("--parent-task-id <id>", "Parent task TaskID used in detect output (default: first task id)")
-    .option("--task-id <id>", "[deprecated] single TaskID, equal to --task-ids <id>")
 
     .option("--data-source <type>", "Data source: sqlite|supabase", "sqlite")
-    .option("--db-path <path>", "SQLite path", "~/.eval/records.sqlite")
-    .option("--table <name>", "Supabase table", "capture_results")
-    .option("--page-size <n>", "Supabase page size", "1000")
-    .option("--timeout-ms <n>", "Supabase timeout (ms)", "30000")
+    .option("--sqlite-path <path>", "SQLite path", "~/.eval/records.sqlite")
+    .option("--supabase-table <name>", "Supabase table", "capture_results")
+    .option("--supabase-page-size <n>", "Supabase page size", "1000")
+    .option("--supabase-timeout-ms <n>", "Supabase timeout (ms)", "30000")
 
     .option("--threshold <num>", "Threshold ratio", "0.5")
     .option("--output <path>", "Write JSON to file; use - for stdout (single unit only)")
-    .option("--app <app>", "Override parent task app")
-    .option("--book-id <id>", "Override parent task book ID")
-    .option("--date <yyyy-mm-dd>", "Override capture day")
     .showHelpAfterError()
     .showSuggestionAfterError();
 
@@ -63,34 +50,24 @@ function parseCLI(argv: string[]): CLIOptions {
   return program.opts<CLIOptions>();
 }
 
-function parseOptionalLegacyTaskIDs(args: CLIOptions): string | undefined {
-  const taskIDs = String(args.taskIds || "").trim();
-  if (taskIDs) return taskIDs;
-  const taskID = String(args.taskId || "").trim();
-  if (!taskID) return undefined;
-  const n = parsePositiveInt(taskID, "task id");
-  process.stderr.write(`[piracy-handler] --task-id is deprecated, use --task-ids ${n}\n`);
-  return String(n);
-}
-
 async function main() {
   const args = parseCLI(process.argv);
   const threshold = toNumber(args.threshold, 0.5);
-  const resultSource = buildResultSourceOptionsFromCLI(args);
-  const taskIds = parseOptionalLegacyTaskIDs(args);
+  const resultSource = buildResultSourceOptionsFromCLI({
+    dataSource: args.dataSource,
+    dbPath: args.sqlitePath,
+    table: args.supabaseTable,
+    pageSize: args.supabasePageSize,
+    timeoutMs: args.supabaseTimeoutMs,
+  });
 
   const units = resolveDetectTaskUnits({
-    taskIds,
-    fromFeishu: Boolean(args.fromFeishu),
+    taskIds: args.taskIds,
     taskApp: args.taskApp,
     taskScene: args.taskScene,
     taskStatus: args.taskStatus,
     taskDate: args.taskDate,
     taskLimit: args.taskLimit,
-    parentTaskId: args.parentTaskId,
-    app: args.app,
-    bookId: args.bookId,
-    date: args.date,
   });
 
   const output = String(args.output || "").trim();

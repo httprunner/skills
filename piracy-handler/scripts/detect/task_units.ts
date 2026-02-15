@@ -62,9 +62,8 @@ function resolveDateFilter(v: string): string {
 
 export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): DetectTaskUnit[] {
   const hasTaskIDs = String(args.taskIds || "").trim() !== "";
-  const useFeishu = Boolean(args.fromFeishu) || !hasTaskIDs;
 
-  if (!useFeishu) {
+  if (hasTaskIDs) {
     const taskIDs = parseTaskIDs(String(args.taskIds || ""));
     const parentTaskID = args.parentTaskId ? parsePositiveInt(args.parentTaskId, "parent task id") : taskIDs[0];
     const parentTasks = runTaskFetch(["--task-id", String(parentTaskID), "--status", "Any", "--date", "Any"]);
@@ -90,7 +89,7 @@ export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): Det
   const taskStatus = String(args.taskStatus || "success").trim() || "success";
   const taskDate = String(args.taskDate || "Today").trim() || "Today";
   const taskLimit = parseNonNegativeInt(String(args.taskLimit || "0"), "task limit");
-  if (!taskApp) throw new Error("--task-app is required when using --from-feishu (or when --task-ids is absent)");
+  if (!taskApp) throw new Error("--task-app is required when --task-ids is absent");
 
   const fetchArgs = ["--app", taskApp, "--scene", taskScene, "--status", taskStatus, "--date", taskDate];
   if (taskLimit > 0) fetchArgs.push("--limit", String(taskLimit));

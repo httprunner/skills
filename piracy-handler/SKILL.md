@@ -61,7 +61,7 @@ npx tsx scripts/webhook.ts --mode reconcile --date <YYYY-MM-DD> --data-source <s
 - `scripts/data/result_source_cli.ts`
 统一 `--data-source/--db-path/--table/--page-size/--timeout-ms` 解析。
 - `scripts/detect/task_units.ts`
-统一 `--task-ids` 与 `--from-feishu` 的任务分组逻辑。
+统一任务分组逻辑：`--task-ids` 优先；缺省时按飞书筛选条件分组。
 - `scripts/detect/core.ts`
 detect 聚合/阈值/summary 核心逻辑。
 - `scripts/detect/runner.ts`
