@@ -88,58 +88,86 @@ async function main() {
     taskLimit: args.taskLimit,
   });
 
-  const results = await runDetectForUnits({
-    units,
-    threshold: toNumber(args.threshold, 0.5),
-    output,
-    resultSource: {
-      dataSource: "supabase",
-      supabaseTable: args.table,
-      pageSize: Number(args.pageSize),
-      timeoutMs: Number(args.timeoutMs),
-    },
-  });
+  const totalTasks = units.reduce((acc, u) => acc + u.taskIDs.length, 0);
+  console.log("========================================");
+  console.log("PIRACY PIPELINE TASK UNITS");
+  console.log("========================================");
+  console.log(`BookID Groups:        ${units.length}`);
+  console.log(`TaskIDs Total:        ${totalTasks}`);
+  for (const [idx, u] of units.entries()) {
+    console.log(`[${idx + 1}/${units.length}] BookID=${u.parent.book_id || "-"} TaskCount=${u.taskIDs.length}`);
+  }
+  console.log("========================================");
 
   let totalSelected = 0;
   let totalRows = 0;
+  let failedGroups = 0;
+  const threshold = toNumber(args.threshold, 0.5);
+  const resultSource = {
+    dataSource: "supabase" as const,
+    supabaseTable: args.table,
+    pageSize: Number(args.pageSize),
+    timeoutMs: Number(args.timeoutMs),
+  };
+  let processedCount = 0;
 
-  for (const r of results) {
-    const selected = Number((r.detect.summary as any)?.group_count_hit || 0);
-    totalSelected += selected;
-    totalRows += r.rowCount;
+  for (const [idx, unit] of units.entries()) {
+    try {
+      console.log(`>>> [${idx + 1}/${units.length}] Start BookID=${unit.parent.book_id || "-"} TaskIDs=${unit.taskIDs.join(",")}`);
+      const results = await runDetectForUnits({
+        units: [unit],
+        threshold,
+        output,
+        resultSource,
+      });
+      const r = results[0];
+      const selected = Number((r.detect.summary as any)?.group_count_hit || 0);
+      totalSelected += selected;
+      totalRows += r.rowCount;
+      processedCount += 1;
 
-    console.log("----------------------------------------");
-    console.log(`PIRACY PIPELINE SUMMARY (ParentTaskID: ${r.unit.parentTaskID})`);
-    console.log("----------------------------------------");
-    console.log(`BookID:              ${r.unit.parent.book_id || "-"}`);
-    console.log(`TaskIDs:             ${r.unit.taskIDs.join(",")}`);
-    console.log(`Rows from Supabase:  ${r.rowCount}`);
-    console.log(`Groups Selected:     ${selected}`);
-    console.log(`Output File:         ${r.outputPath}`);
-    console.log("----------------------------------------");
+      console.log("----------------------------------------");
+      console.log(`PIRACY PIPELINE SUMMARY (ParentTaskID: ${r.unit.parentTaskID})`);
+      console.log("----------------------------------------");
+      console.log(`BookID:              ${r.unit.parent.book_id || "-"}`);
+      console.log(`TaskIDs:             ${r.unit.taskIDs.join(",")}`);
+      console.log(`Rows from Supabase:  ${r.rowCount}`);
+      console.log(`Groups Selected:     ${selected}`);
+      console.log(`Output File:         ${r.outputPath}`);
+      console.log("----------------------------------------");
 
-    if (!args.skipCreateSubtasks) {
-      const createArgs = ["--input", r.outputPath];
-      if (args.dryRun) createArgs.push("--dry-run");
-      runLocalScript("piracy_create_subtasks.ts", createArgs);
-    }
+      if (selected <= 0) {
+        console.log(`Skip downstream:     no selected groups for BookID=${r.unit.parent.book_id || "-"}`);
+      } else {
+        if (!args.skipCreateSubtasks) {
+          const createArgs = ["--input", r.outputPath];
+          if (args.dryRun) createArgs.push("--dry-run");
+          runLocalScript("piracy_create_subtasks.ts", createArgs);
+        }
 
-    if (!args.skipUpsertWebhookPlans) {
-      const upsertArgs = ["--source", "detect", "--input", r.outputPath, "--biz-type", String(args.bizType || "piracy_general_search")];
-      if (args.dryRun) upsertArgs.push("--dry-run");
-      runLocalScript("upsert_webhook_plan.ts", upsertArgs);
+        if (!args.skipUpsertWebhookPlans) {
+          const upsertArgs = ["--source", "detect", "--input", r.outputPath, "--biz-type", String(args.bizType || "piracy_general_search")];
+          if (args.dryRun) upsertArgs.push("--dry-run");
+          runLocalScript("upsert_webhook_plan.ts", upsertArgs);
+        }
+      }
+      console.log(`<<< [${idx + 1}/${units.length}] Done BookID=${r.unit.parent.book_id || "-"} Selected=${selected} Rows=${r.rowCount}`);
+    } catch (err) {
+      failedGroups += 1;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`xxx [${idx + 1}/${units.length}] Failed BookID=${unit.parent.book_id || "-"}: ${msg}`);
     }
   }
 
-  if (results.length > 1) {
-    console.log("========================================");
-    console.log("PIRACY PIPELINE BATCH SUMMARY");
-    console.log("========================================");
-    console.log(`BookID Groups:        ${results.length}`);
-    console.log(`Rows from Supabase:   ${totalRows}`);
-    console.log(`Groups Selected Sum:  ${totalSelected}`);
-    console.log("========================================");
-  }
+  console.log("========================================");
+  console.log("PIRACY PIPELINE BATCH SUMMARY");
+  console.log("========================================");
+  console.log(`BookID Groups:        ${units.length}`);
+  console.log(`Processed Groups:     ${processedCount}`);
+  console.log(`Failed Groups:        ${failedGroups}`);
+  console.log(`Rows from Supabase:   ${totalRows}`);
+  console.log(`Groups Selected Sum:  ${totalSelected}`);
+  console.log("========================================");
 }
 
 main().catch((err) => {
