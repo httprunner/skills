@@ -125,6 +125,12 @@ export function orFilter(conditions: any[]) {
 
 export type FeishuCtx = { baseURL: string; token: string };
 
+function useWebhookView() {
+  // Default to ignoring view_id so upsert/query can see full table and avoid duplicates.
+  const raw = env("WEBHOOK_USE_VIEW", "false").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 export async function searchRecords(ctx: FeishuCtx, bitableURL: string, filter: any, pageSize = 200, limit = 200) {
   const ref = parseBitableURL(bitableURL);
   if (!ref.appToken && ref.wikiToken) ref.appToken = await resolveWikiToken(ctx.baseURL, ctx.token, ref.wikiToken);
@@ -139,7 +145,7 @@ export async function searchRecords(ctx: FeishuCtx, bitableURL: string, filter: 
     const url = `${ctx.baseURL}/open-apis/bitable/v1/apps/${ref.appToken}/tables/${ref.tableID}/records/search?${q.toString()}`;
     const body: any = {};
     if (filter) body.filter = filter;
-    if (ref.viewID) body.view_id = ref.viewID;
+    if (ref.viewID && useWebhookView()) body.view_id = ref.viewID;
     const data = await requestJSON("POST", url, ctx.token, body);
     const items = Array.isArray(data?.data?.items) ? data.data.items : [];
     out.push(...items);

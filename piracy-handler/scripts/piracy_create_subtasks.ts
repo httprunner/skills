@@ -92,9 +92,6 @@ async function main() {
     const userID = String(g?.user_id || "").trim();
     const userName = String(g?.user_name || "").trim();
     const params = String(g?.params || parent?.params || "").trim();
-    const collectionItemID = String(g?.collection_item_id || "").trim();
-    const anchorLinks = Array.isArray(g?.anchor_links) ? g.anchor_links.map((x: any) => String(x).trim()).filter(Boolean) : [];
-
     const base = {
       app,
       group_id: groupID,
@@ -113,14 +110,6 @@ async function main() {
     };
 
     creates.push({ ...base, scene: "个人页搜索" });
-
-    if (collectionItemID && !collectionItemID.startsWith("__row_")) {
-      creates.push({ ...base, scene: "合集视频采集", item_id: collectionItemID });
-    }
-
-    for (const link of anchorLinks) {
-      creates.push({ ...base, scene: "视频锚点采集", extra: link });
-    }
   }
 
   const summary = {

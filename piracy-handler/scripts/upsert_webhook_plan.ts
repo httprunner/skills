@@ -1,20 +1,18 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import {
-  andFilter,
   batchCreate,
   batchUpdate,
-  condition,
   dayStartMs,
   env,
   expandHome,
   type FeishuCtx,
   getTenantToken,
   must,
-  orFilter,
   parseTaskIDs,
   readInput,
   searchRecords,
+  toDay,
   webhookFields,
 } from "./webhook_lib";
 
@@ -60,12 +58,44 @@ function parseItems(inputText: string): UpsertItem[] {
 
 function normalizeItem(raw: any, defaultBizType: string): UpsertItem | null {
   const groupID = String(raw?.group_id ?? raw?.groupID ?? "").trim();
-  const date = String(raw?.date ?? raw?.day ?? "").trim();
+  const rawDate = String(raw?.date ?? raw?.day ?? "").trim();
+  const date = toDay(rawDate) || rawDate;
   const bizType = String(raw?.biz_type ?? raw?.bizType ?? defaultBizType).trim() || defaultBizType;
   const taskIDs = parseTaskIDs(raw?.task_ids ?? raw?.taskIDs ?? raw?.task_ids_json ?? raw?.taskIDsJSON ?? raw?.taskIds ?? "");
   const dramaInfo = typeof raw?.drama_info === "string" ? raw.drama_info : typeof raw?.dramaInfo === "string" ? raw.dramaInfo : "";
   if (!groupID || !date || !taskIDs.length) return null;
   return { group_id: groupID, date, biz_type: bizType, task_ids: taskIDs, drama_info: dramaInfo || undefined };
+}
+
+function normalizeDayValue(v: any): string {
+  if (v == null) return "";
+  if (Array.isArray(v)) {
+    for (const it of v) {
+      const d = normalizeDayValue(it);
+      if (d) return d;
+    }
+    return "";
+  }
+  if (typeof v === "object") {
+    if ((v as any).value != null) return normalizeDayValue((v as any).value);
+    if ((v as any).text != null) return normalizeDayValue((v as any).text);
+  }
+  const s = String(v).trim();
+  if (!s) return "";
+  return toDay(s) || "";
+}
+
+function normalizeTextValue(v: any): string {
+  if (v == null) return "";
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => normalizeTextValue(x)).filter(Boolean);
+    return parts.join(" ").trim();
+  }
+  if (typeof v === "object") {
+    if ((v as any).value != null) return normalizeTextValue((v as any).value);
+    if ((v as any).text != null) return normalizeTextValue((v as any).text);
+  }
+  return String(v).trim();
 }
 
 function parseCLI(argv: string[]): CLIOptions {
@@ -117,38 +147,27 @@ async function main() {
   const ctx: FeishuCtx = { baseURL, token };
   const wf = webhookFields();
 
-  const buckets = new Map<string, { bizType: string; day: string; dayMs: number; groupIDs: string[] }>();
+  const scanLimit = Math.trunc(Number(env("WEBHOOK_UPSERT_SCAN_LIMIT", "10000"))) || 10000;
+  const targetKeys = new Set<string>();
   for (const it of normalized) {
-    const day = it.date;
+    const day = normalizeDayValue(it.date);
     const dayMs = dayStartMs(day);
-    if (!dayMs) throw new Error(`invalid date: ${day}`);
-    const key = `${it.biz_type || bizTypeDefault}@@${dayMs}`;
-    const b = buckets.get(key) || { bizType: it.biz_type || bizTypeDefault, day, dayMs, groupIDs: [] as string[] };
-    b.groupIDs.push(it.group_id);
-    buckets.set(key, b);
+    if (!dayMs) throw new Error(`invalid date: ${it.date}`);
+    const bizType = it.biz_type || bizTypeDefault;
+    targetKeys.add(`${bizType}@@${day}@@${it.group_id}`);
   }
 
+  const allRows = await searchRecords(ctx, webhookURL, null, 200, scanLimit);
   const existingByKey = new Map<string, { recordID: string }>();
-  for (const b of buckets.values()) {
-    const uniq = Array.from(new Set(b.groupIDs)).filter(Boolean);
-    for (let i = 0; i < uniq.length; i += 40) {
-      const chunk = uniq.slice(i, i + 40);
-      const rows = await searchRecords(
-        ctx,
-        webhookURL,
-        andFilter(
-          [condition(wf.BizType, "is", b.bizType), condition(wf.Date, "is", "ExactDate", String(b.dayMs))],
-          [orFilter(chunk.map((gid) => condition(wf.GroupID, "is", gid)))],
-        ),
-        200,
-        200,
-      );
-      for (const r of rows) {
-        const recordID = String(r.record_id || "").trim();
-        const groupID = String(r?.fields?.[wf.GroupID] ?? "").trim();
-        if (!recordID || !groupID) continue;
-        existingByKey.set(`${b.bizType}@@${b.dayMs}@@${groupID}`, { recordID });
-      }
+  for (const r of allRows) {
+    const recordID = String(r.record_id || "").trim();
+    const bizType = normalizeTextValue(r?.fields?.[wf.BizType]);
+    const groupID = normalizeTextValue(r?.fields?.[wf.GroupID]);
+    const day = normalizeDayValue(r?.fields?.[wf.Date]);
+    if (!recordID || !bizType || !groupID || !day) continue;
+    const key = `${bizType}@@${day}@@${groupID}`;
+    if (targetKeys.has(key) && !existingByKey.has(key)) {
+      existingByKey.set(key, { recordID });
     }
   }
 
@@ -157,9 +176,11 @@ async function main() {
   const errors: Array<{ group_id: string; date: string; biz_type: string; err: string }> = [];
 
   for (const it of normalized) {
-    const dayMs = dayStartMs(it.date);
+    const day = normalizeDayValue(it.date);
+    const dayMs = dayStartMs(day);
+    if (!dayMs) throw new Error(`invalid date: ${it.date}`);
     const bizType = it.biz_type || bizTypeDefault;
-    const k = `${bizType}@@${dayMs}@@${it.group_id}`;
+    const k = `${bizType}@@${day}@@${it.group_id}`;
     const taskIDsPayload = JSON.stringify(it.task_ids);
     const dramaInfo = it.drama_info || "";
 
