@@ -69,9 +69,8 @@ npx tsx scripts/piracy_create_subtasks.ts --task-id 123456 --dry-run
 
 ```bash
 # detect 输入（推荐用于 piracy 主流程）
-npx tsx scripts/upsert_webhook_plan.ts --source detect --parent-task-id 123456
 npx tsx scripts/upsert_webhook_plan.ts --source detect --input ~/.eval/123456/detect.json --biz-type piracy_general_search
-npx tsx scripts/upsert_webhook_plan.ts --source detect --parent-task-id 123456 --dry-run
+npx tsx scripts/upsert_webhook_plan.ts --source detect --input ~/.eval/123456/detect.json --dry-run
 
 # 通用 plan 输入（JSON/JSONL）
 npx tsx scripts/upsert_webhook_plan.ts --source plan --input plans.jsonl
@@ -113,7 +112,7 @@ npx tsx scripts/webhook.ts --date 2026-02-15 --dry-run
 - `--biz-type`：业务类型（默认 `piracy_general_search`）
 - `--limit`：reconcile 最大处理条数（默认 `50`）
 - `--data-source sqlite|supabase`：payload 采集结果来源
-- `--db-path`：sqlite 路径（sqlite 模式）
+- `--sqlite-path`：sqlite 路径（sqlite 模式）
 - `--table --page-size --timeout-ms`：Supabase 参数（supabase 模式）
 - `--max-retries`：最大重试次数
 

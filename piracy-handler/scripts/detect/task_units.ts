@@ -1,4 +1,4 @@
-import { parsePositiveInt, runTaskFetch, toDay } from "../shared/lib";
+import { parsePositiveInt, runTaskFetch, toDay, todayLocal, yesterdayLocal } from "../shared/lib";
 
 export type DetectTaskUnit = {
   parentTaskID: number;
@@ -13,16 +13,11 @@ export type DetectTaskUnit = {
 
 export type ResolveDetectTaskUnitsOptions = {
   taskIds?: string;
-  fromFeishu?: boolean;
   taskApp?: string;
   taskScene?: string;
   taskStatus?: string;
   taskDate?: string;
   taskLimit?: string;
-  parentTaskId?: string;
-  app?: string;
-  bookId?: string;
-  date?: string;
 };
 
 function parseTaskIDs(csv: string): number[] {
@@ -51,12 +46,8 @@ function resolveDateFilter(v: string): string {
   if (!trimmed) return "today";
   const lower = trimmed.toLowerCase();
   if (lower === "any") return "any";
-  if (lower === "today") return new Date().toISOString().slice(0, 10);
-  if (lower === "yesterday") {
-    const now = new Date();
-    const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    return y.toISOString().slice(0, 10);
-  }
+  if (lower === "today") return todayLocal();
+  if (lower === "yesterday") return yesterdayLocal();
   return toDay(trimmed) || trimmed;
 }
 
@@ -65,19 +56,19 @@ export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): Det
 
   if (hasTaskIDs) {
     const taskIDs = parseTaskIDs(String(args.taskIds || ""));
-    const parentTaskID = args.parentTaskId ? parsePositiveInt(args.parentTaskId, "parent task id") : taskIDs[0];
+    const parentTaskID = taskIDs[0];
     const parentTasks = runTaskFetch(["--task-id", String(parentTaskID), "--status", "Any", "--date", "Any"]);
     if (!parentTasks.length) throw new Error(`parent task not found: ${parentTaskID}`);
     const parentTask = parentTasks[0];
-    const day = String(args.date || toDay(parentTask.date) || new Date().toISOString().slice(0, 10));
+    const day = String(toDay(parentTask.date) || todayLocal());
     return [
       {
         parentTaskID,
         taskIDs,
         day,
         parent: {
-          app: String(args.app || parentTask.app || "").trim(),
-          book_id: String(args.bookId || parentTask.book_id || "").trim(),
+          app: String(parentTask.app || "").trim(),
+          book_id: String(parentTask.book_id || "").trim(),
           params: String(parentTask.params || "").trim(),
         },
       },
@@ -134,15 +125,15 @@ export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): Det
     if (!ids.length) continue;
     const parentTaskID = ids[0];
     const parentTask = bucket.find((x) => Number(x.task_id) === parentTaskID) || bucket[0];
-    const day = String(args.date || toDay(parentTask.date) || new Date().toISOString().slice(0, 10));
+    const day = String(toDay(parentTask.date) || todayLocal());
 
     units.push({
       parentTaskID,
       taskIDs: ids,
       day,
       parent: {
-        app: String(args.app || parentTask.app || taskApp || "").trim(),
-        book_id: String(args.bookId || bookID || "").trim(),
+        app: String(parentTask.app || taskApp || "").trim(),
+        book_id: String(bookID || "").trim(),
         params: String(parentTask.params || "").trim(),
       },
     });

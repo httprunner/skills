@@ -90,14 +90,14 @@ async function main() {
   for (const r of results) {
     const summary = (r.detect.summary || {}) as Record<string, any>;
     console.log("----------------------------------------");
-    console.log(`PIRACY DETECT SUMMARY (ParentTaskID: ${r.unit.parentTaskID})`);
+    console.log("PIRACY DETECT SUMMARY");
     console.log("----------------------------------------");
-    console.log(`TaskIDs:             ${r.unit.taskIDs.join(",")}`);
+    console.log(`Source TaskIDs:      ${r.unit.taskIDs.join(",")}`);
     console.log(`Data Source:         ${resultSource.dataSource}`);
     console.log(`Rows Read:           ${r.rowCount}`);
     console.log(`Threshold:           ${threshold}`);
     console.log(`Capture Day:         ${r.unit.day}`);
-    console.log(`Groups Selected:     ${summary.groups_above_threshold ?? 0}`);
+    console.log(`Groups Selected:     ${summary.group_count_hit ?? 0}`);
     if (Array.isArray(summary.unresolved_task_ids) && summary.unresolved_task_ids.length > 0) {
       console.log(`Unresolved Tasks:    ${summary.unresolved_task_ids.length}`);
     }
@@ -112,7 +112,7 @@ async function main() {
 
   if (results.length > 1) {
     const totalRows = results.reduce((acc, x) => acc + x.rowCount, 0);
-    const totalSelected = results.reduce((acc, x) => acc + Number((x.detect.summary as any)?.groups_above_threshold || 0), 0);
+    const totalSelected = results.reduce((acc, x) => acc + Number((x.detect.summary as any)?.group_count_hit || 0), 0);
     console.log("========================================");
     console.log("PIRACY DETECT BATCH SUMMARY");
     console.log("========================================");

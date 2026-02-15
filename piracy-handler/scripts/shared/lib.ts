@@ -58,6 +58,19 @@ export function dayStartMs(day: string) {
   return d.getTime();
 }
 
+function formatLocalDay(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+export function todayLocal() {
+  return formatLocalDay(new Date());
+}
+
+export function yesterdayLocal() {
+  const now = new Date();
+  return formatLocalDay(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+}
+
 export function toDay(v: any) {
   const s = String(v ?? "").trim();
   if (!s) return "";

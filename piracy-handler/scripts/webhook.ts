@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { parseLimit, parseOptionalPositiveInt } from "./shared/cli";
 import { buildResultSourceOptionsFromCLI } from "./data/result_source_cli";
+import { todayLocal } from "./shared/lib";
 import { listPendingOrFailedRows, processOneGroup, resolveGroupFromTaskID } from "./webhook/lib";
 
 type CLIOptions = {
@@ -13,7 +14,7 @@ type CLIOptions = {
   limit: string;
   dryRun: boolean;
   dataSource: string;
-  dbPath?: string;
+  sqlitePath?: string;
   table?: string;
   pageSize?: string;
   timeoutMs?: string;
@@ -35,7 +36,7 @@ function parseCLI(argv: string[]): CLIOptions {
     .option("--limit <num>", "Max rows to reconcile (reconcile mode)", "50")
     .option("--dry-run", "Compute only, do not call webhook or write back")
     .option("--data-source <type>", "Result source: sqlite|supabase", "sqlite")
-    .option("--db-path <path>", "SQLite path override")
+    .option("--sqlite-path <path>", "SQLite path override")
     .option("--table <name>", "Supabase table name")
     .option("--page-size <n>", "Supabase page size", "1000")
     .option("--timeout-ms <n>", "Supabase timeout in milliseconds", "30000")
@@ -77,7 +78,7 @@ async function runSingle(args: CLIOptions) {
   }
 
   if (!groupID) throw new Error("single mode requires --group-id or --task-id");
-  if (!day) day = new Date().toISOString().slice(0, 10);
+  if (!day) day = todayLocal();
 
   const result = await processOneGroup({
     groupID,
@@ -95,7 +96,7 @@ async function runSingle(args: CLIOptions) {
 }
 
 async function runReconcile(args: CLIOptions) {
-  const day = String(args.date || "").trim() || new Date().toISOString().slice(0, 10);
+  const day = String(args.date || "").trim() || todayLocal();
   const bizType = String(args.bizType || "piracy_general_search").trim();
   const limit = parseLimit(String(args.limit), "--limit");
   const dryRun = Boolean(args.dryRun);

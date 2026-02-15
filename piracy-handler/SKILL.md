@@ -13,8 +13,8 @@ description: 盗版检测与后置处理编排器。Use when wechat-search-colle
 
 ```bash
 npx tsx scripts/piracy_detect.ts --task-ids <TASK_ID[,TASK_ID2,...]> --data-source <sqlite|supabase>
-npx tsx scripts/piracy_create_subtasks.ts --task-id <PARENT_TASK_ID>
-npx tsx scripts/upsert_webhook_plan.ts --source detect --parent-task-id <PARENT_TASK_ID>
+npx tsx scripts/piracy_create_subtasks.ts --input <DETECT_JSON_PATH>
+npx tsx scripts/upsert_webhook_plan.ts --source detect --input <DETECT_JSON_PATH>
 ```
 
 ### B. 一条命令全流程（兼容入口）
@@ -59,7 +59,7 @@ npx tsx scripts/webhook.ts --mode reconcile --date <YYYY-MM-DD> --data-source <s
 - `scripts/data/result_source.ts`
 统一 `capture_results` 读取接口（sqlite/supabase）。
 - `scripts/data/result_source_cli.ts`
-统一 `--data-source/--db-path/--table/--page-size/--timeout-ms` 解析。
+统一 `--data-source/--sqlite-path/--table/--page-size/--timeout-ms` 解析。
 - `scripts/detect/task_units.ts`
 统一任务分组逻辑：`--task-ids` 优先；缺省时按飞书筛选条件分组。
 - `scripts/detect/core.ts`

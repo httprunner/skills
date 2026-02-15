@@ -1,4 +1,5 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { dayStartMs, defaultDetectPath, ensureDir, expandHome, must, toNumber } from "../shared/lib";
 import { buildDetectOutput, type DetectOutput } from "./core";
@@ -27,9 +28,17 @@ function sanitizeForFilename(v: string): string {
     .slice(0, 64);
 }
 
+function defaultDetectPathByTaskIDs(taskIDs: number[]): string {
+  const ids = Array.from(new Set((taskIDs || []).map((x) => Math.trunc(Number(x))).filter((x) => x > 0))).sort((a, b) => a - b);
+  if (!ids.length) throw new Error("cannot build default detect path: empty task ids");
+  if (ids.length === 1) return defaultDetectPath(ids[0]);
+  const joined = ids.join("_");
+  return path.join(os.homedir(), ".eval", "detect", `${joined}.json`);
+}
+
 function resolveOutputPath(baseOutputArg: string | undefined, unit: DetectTaskUnit, multi: boolean): string {
   const outArg = String(baseOutputArg || "").trim();
-  if (!outArg) return expandHome(defaultDetectPath(unit.parentTaskID));
+  if (!outArg) return expandHome(defaultDetectPathByTaskIDs(unit.taskIDs));
   if (outArg === "-") return "-";
 
   const expanded = expandHome(outArg);
@@ -63,14 +72,14 @@ export async function runDetectForUnits(input: DetectRunnerInput): Promise<Detec
 
     const rawRows = await source.fetchByTaskIDs(unit.taskIDs);
     const detect = buildDetectOutput({
-      parentTaskID: unit.parentTaskID,
+      sourceTaskIDs: unit.taskIDs,
       threshold,
       day,
       dayMs,
-      parent: unit.parent,
       rawRows,
       dramaURL,
       sourcePath: source.describe(),
+      sourceType: input.resultSource.dataSource,
     });
 
     const outputPath = resolveOutputPath(input.output, unit, multi);

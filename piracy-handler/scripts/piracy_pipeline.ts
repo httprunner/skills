@@ -8,13 +8,11 @@ import { runDetectForUnits } from "./detect/runner";
 
 type CLIOptions = {
   taskIds?: string;
-  fromFeishu?: boolean;
   taskApp?: string;
   taskScene: string;
   taskStatus: string;
   taskDate: string;
   taskLimit: string;
-  parentTaskId?: string;
   threshold: string;
   output?: string;
   table: string;
@@ -35,22 +33,17 @@ function parseCLI(argv: string[]): CLIOptions {
     .name("piracy_pipeline")
     .description("Compatibility shell: run detect/create/upsert pipeline")
     .option("--task-ids <csv>", "Comma-separated TaskID list, e.g. 69111,69112,69113")
-    .option("--from-feishu", "Select parent tasks from task-status Bitable, then merge by BookID")
     .option("--task-app <app>", "Feishu task filter: App")
     .option("--task-scene <scene>", "Feishu task filter: Scene", "综合页搜索")
     .option("--task-status <status>", "Feishu task filter: Status", "success")
     .option("--task-date <date>", "Feishu task filter: Date preset/value (e.g. Today/Yesterday/2026-02-15)", "Today")
     .option("--task-limit <n>", "Feishu task fetch limit (0 = no cap)", "0")
-    .option("--parent-task-id <id>", "Parent task TaskID used in detect output (default: first task id)")
     .option("--threshold <num>", "Threshold ratio", "0.5")
-    .option("--output <path>", "Detect output path (default: ~/.eval/<ParentTaskID>/detect.json)")
+    .option("--output <path>", "Detect output path")
     .option("--table <name>", "Supabase table name", env("SUPABASE_RESULT_TABLE", "capture_results"))
     .option("--page-size <n>", "Supabase page size", "1000")
     .option("--timeout-ms <n>", "HTTP timeout in milliseconds", "30000")
     .option("--biz-type <name>", "Webhook BizType", "piracy_general_search")
-    .option("--app <app>", "Override parent task app")
-    .option("--book-id <id>", "Override parent task book id")
-    .option("--date <yyyy-mm-dd>", "Override capture day")
     .option("--dry-run", "Compute and print, skip writes in create/upsert")
     .option("--skip-create-subtasks", "Skip creating child tasks")
     .option("--skip-upsert-webhook-plans", "Skip upserting webhook plan records")
@@ -88,16 +81,11 @@ async function main() {
 
   const units = resolveDetectTaskUnits({
     taskIds: args.taskIds,
-    fromFeishu: Boolean(args.fromFeishu),
     taskApp: args.taskApp,
     taskScene: args.taskScene,
     taskStatus: args.taskStatus,
     taskDate: args.taskDate,
     taskLimit: args.taskLimit,
-    parentTaskId: args.parentTaskId,
-    app: args.app,
-    bookId: args.bookId,
-    date: args.date,
   });
 
   const results = await runDetectForUnits({
@@ -116,7 +104,7 @@ async function main() {
   let totalRows = 0;
 
   for (const r of results) {
-    const selected = Number((r.detect.summary as any)?.groups_above_threshold || 0);
+    const selected = Number((r.detect.summary as any)?.group_count_hit || 0);
     totalSelected += selected;
     totalRows += r.rowCount;
 

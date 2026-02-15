@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { chunk, defaultDetectPath, parsePositiveInt, readInput as readTextInput, runTaskFetch } from "./shared/lib";
+import { readInput as readTextInput, todayLocal } from "./shared/lib";
 import {
   batchCreate,
   batchUpdate,
@@ -19,7 +19,6 @@ import {
 type CLIOptions = {
   source: string;
   input?: string;
-  parentTaskId?: string;
   groupId?: string;
   date?: string;
   bizType: string;
@@ -36,6 +35,14 @@ type UpsertItem = {
   task_ids: number[];
   drama_info?: string;
 };
+
+function parsePositiveIDs(values: any): number[] {
+  const input = Array.isArray(values) ? values : [];
+  const ids = input
+    .map((x: any) => Math.trunc(Number(x)))
+    .filter((x: number) => Number.isFinite(x) && x > 0);
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
 
 function encodeTaskIDsByStatus(taskIDs: number[]): string {
   const status = String(env("WEBHOOK_TASKIDS_DEFAULT_STATUS", "pending")).trim().toLowerCase() || "pending";
@@ -111,9 +118,8 @@ function parseCLI(argv: string[]): CLIOptions {
     .description("Single webhook upsert entry: from detect output or from plan input")
     .option("--source <type>", "Input source: auto|detect|plan", "auto")
     .option("--input <path>", "Input file path; detect.json or plan JSON/JSONL (use - for stdin)")
-    .option("--parent-task-id <id>", "Detect source parent TaskID; read ~/.eval/<TaskID>/detect.json when --input omitted")
     .option("--group-id <id>", "Plan source: single GroupID")
-    .option("--date <yyyy-mm-dd>", "Plan source capture day (default: today)", new Date().toISOString().slice(0, 10))
+    .option("--date <yyyy-mm-dd>", "Plan source capture day (default: today)", todayLocal())
     .option("--biz-type <name>", "BizType", "piracy_general_search")
     .option("--task-id <csv>", "Plan source TaskID(s), comma-separated (e.g. 111 or 111,222,333)")
     .option("--drama-info <json>", "Plan source DramaInfo JSON string")
@@ -136,7 +142,8 @@ function mapAppLabel(app: string): string {
 }
 
 function looksLikeDetectOutput(v: any): boolean {
-  return Boolean(v && typeof v === "object" && Number(v.parent_task_id) > 0 && Array.isArray(v.selected_groups));
+  if (!v || typeof v !== "object") return false;
+  return Array.isArray(v.groups_by_app_book) && Array.isArray(v.source_tasks);
 }
 
 function parseDetectObjectFromText(txt: string): any {
@@ -149,105 +156,76 @@ function parseDetectObjectFromText(txt: string): any {
   }
 }
 
+function parseGroupTaskIDs(g: any): number[] {
+  const fromTaskInfo = Array.isArray(g?.task_info) ? g.task_info.map((x: any) => x?.task_id) : [];
+  return parsePositiveIDs(fromTaskInfo);
+}
+
+function parseDetectSourceTaskIDs(detect: any): number[] {
+  const fromSourceTasks = Array.isArray(detect?.source_tasks) ? detect.source_tasks.map((x: any) => x?.task_id) : [];
+  return parsePositiveIDs(fromSourceTasks);
+}
+
 function buildUpsertItemsFromDetect(detect: any, bizType: string): UpsertItem[] {
-  const parentTaskID = Math.trunc(Number(detect?.parent_task_id));
-  const day = String(detect?.day || "").trim();
-  const dayMs = Math.trunc(Number(detect?.day_ms || 0));
-  const selected = Array.isArray(detect?.selected_groups) ? detect.selected_groups : [];
-
-  if (!parentTaskID || !day) throw new Error("invalid detect input: missing parent_task_id/day");
-
-  const groupsByApp = new Map<string, any[]>();
-  for (const g of selected) {
-    const app = String(g?.app || "").trim();
-    const groupID = String(g?.group_id || "").trim();
-    if (!app || !groupID) continue;
-    const arr = groupsByApp.get(app) || [];
-    arr.push(g);
-    groupsByApp.set(app, arr);
-  }
-
-  const taskIDsByGroup = new Map<string, number[]>();
-  for (const [app, groups] of groupsByApp.entries()) {
-    const ids = Array.from(new Set(groups.map((g) => String(g?.group_id || "").trim()).filter(Boolean)));
-    for (const batch of chunk(ids, 40)) {
-      const tasks = runTaskFetch([
-        "--group-id",
-        batch.join(","),
-        "--app",
-        app,
-        "--scene",
-        "Any",
-        "--status",
-        "Any",
-        "--date",
-        day,
-      ]);
-      for (const t of tasks) {
-        const gid = String((t as any)?.group_id || "").trim();
-        const tid = Math.trunc(Number((t as any)?.task_id));
-        if (!gid || !Number.isFinite(tid) || tid <= 0) continue;
-        const arr = taskIDsByGroup.get(gid) || [];
-        arr.push(tid);
-        taskIDsByGroup.set(gid, arr);
-      }
-    }
-  }
+  const day = String(detect?.capture_day || detect?.day || "").trim();
+  const dayMs = Math.trunc(Number(detect?.capture_day_ms ?? detect?.day_ms ?? 0));
+  const topSourceTaskIDs = parseDetectSourceTaskIDs(detect);
+  if (!day) throw new Error("invalid detect input: missing capture day");
+  if (!Array.isArray(detect?.groups_by_app_book)) throw new Error("invalid detect input: missing groups_by_app_book");
 
   const out: UpsertItem[] = [];
-  for (const g of selected) {
-    const groupID = String(g?.group_id || "").trim();
-    if (!groupID) continue;
-    const tids = Array.from(new Set([parentTaskID, ...(taskIDsByGroup.get(groupID) || [])])).sort((a, b) => a - b);
-    if (!tids.length) continue;
+  for (const appBook of detect.groups_by_app_book) {
+    const app = String(appBook?.app || "").trim();
+    const bookID = String(appBook?.book_id || "").trim();
+    const drama = appBook?.drama || {};
+    const groups = Array.isArray(appBook?.groups) ? appBook.groups : [];
 
-    const drama = g?.drama || {};
-    const dramaInfoObj = {
-      CaptureDate: String(dayMs || ""),
-      DramaID: String(g?.book_id || "").trim(),
-      DramaName: String(drama?.name || g?.params || "").trim(),
-      EpisodeCount: String(drama?.episode_count || "").trim(),
-      Priority: String(drama?.priority || "").trim(),
-      RightsProtectionScenario: String(drama?.rights_protection_scenario || "").trim(),
-      TotalDuration: String(drama?.total_duration_sec ?? ""),
-      CaptureDuration: String(g?.capture_duration_sec ?? ""),
-      GeneralSearchRatio: `${(Number(g?.ratio || 0) * 100).toFixed(2)}%`,
-    };
+    for (const g of groups) {
+      const groupID = String(g?.group_id || "").trim();
+      if (!groupID) continue;
+      const groupTaskIDs = parseGroupTaskIDs(g);
+      const tids = Array.from(new Set([...groupTaskIDs, ...topSourceTaskIDs])).sort((a, b) => a - b);
+      if (!tids.length) continue;
 
-    out.push({
-      group_id: groupID,
-      date: day,
-      biz_type: bizType,
-      app: mapAppLabel(String(g?.app || "").trim()),
-      task_ids: tids,
-      drama_info: JSON.stringify(dramaInfoObj),
-    });
+      const dramaInfoObj = {
+        CaptureDate: String(dayMs || ""),
+        DramaID: bookID,
+        DramaName: String(drama?.name || g?.task_info?.[0]?.params || "").trim(),
+        EpisodeCount: String(drama?.episode_count || "").trim(),
+        Priority: String(drama?.priority || "").trim(),
+        RightsProtectionScenario: String(drama?.rights_protection_scenario || "").trim(),
+        TotalDuration: String(drama?.total_duration_sec ?? ""),
+        CaptureDuration: String(g?.capture_duration_sec ?? ""),
+        GeneralSearchRatio: `${(Number(g?.ratio || 0) * 100).toFixed(2)}%`,
+      };
+
+      out.push({
+        group_id: groupID,
+        date: day,
+        biz_type: bizType,
+        app: mapAppLabel(app),
+        task_ids: tids,
+        drama_info: JSON.stringify(dramaInfoObj),
+      });
+    }
   }
-
   return out;
 }
 
-function resolveSourceMode(args: CLIOptions): "detect" | "plan" {
+function resolveSourceMode(args: CLIOptions, parsedInput?: any): "detect" | "plan" {
   const source = String(args.source || "auto").trim().toLowerCase();
   if (source === "detect" || source === "plan") return source;
   if (source !== "auto") throw new Error(`invalid --source: ${args.source}; expected auto|detect|plan`);
 
-  if (String(args.parentTaskId || "").trim()) return "detect";
   if (String(args.groupId || "").trim()) return "plan";
   if (String(args.input || "").trim()) {
-    const txt = readInput(String(args.input));
-    try {
-      const parsed = JSON.parse(String(txt || "").trim());
-      return looksLikeDetectOutput(parsed) ? "detect" : "plan";
-    } catch {
-      return "plan";
-    }
+    return looksLikeDetectOutput(parsedInput) ? "detect" : "plan";
   }
-  throw new Error("cannot resolve source mode; use --source or provide --parent-task-id/--group-id/--input");
+  throw new Error("cannot resolve source mode; use --source or provide --group-id/--input");
 }
 
-function buildPlanItems(args: CLIOptions, bizTypeDefault: string): UpsertItem[] {
-  if (args.input) return parseItems(readInput(args.input));
+function buildPlanItems(args: CLIOptions, bizTypeDefault: string, inputText?: string): UpsertItem[] {
+  if (inputText) return parseItems(inputText);
   if (!args.groupId) return [];
   return [
     {
@@ -260,16 +238,9 @@ function buildPlanItems(args: CLIOptions, bizTypeDefault: string): UpsertItem[] 
   ];
 }
 
-function buildDetectItems(args: CLIOptions, bizTypeDefault: string): UpsertItem[] {
-  let detectObj: any;
-  if (args.input) {
-    detectObj = parseDetectObjectFromText(readTextInput(String(args.input)));
-  } else {
-    const tidRaw = String(args.parentTaskId || "").trim();
-    if (!tidRaw) throw new Error("detect source requires --input or --parent-task-id");
-    const tid = parsePositiveInt(tidRaw, "--parent-task-id");
-    detectObj = parseDetectObjectFromText(readTextInput(defaultDetectPath(tid)));
-  }
+function buildDetectItems(args: CLIOptions, bizTypeDefault: string, inputText?: string, parsedInput?: any): UpsertItem[] {
+  if (!args.input && !inputText) throw new Error("detect source requires --input");
+  const detectObj = looksLikeDetectOutput(parsedInput) ? parsedInput : parseDetectObjectFromText(inputText || readTextInput(String(args.input)));
   return buildUpsertItemsFromDetect(detectObj, bizTypeDefault);
 }
 
@@ -277,9 +248,22 @@ async function main() {
   const args = parseCLI(process.argv);
   const dryRun = Boolean(args.dryRun);
   const bizTypeDefault = String(args.bizType || "piracy_general_search").trim();
-  const sourceMode = resolveSourceMode(args);
+  const inputPath = String(args.input || "").trim();
+  const inputText = inputPath ? readInput(inputPath) : "";
+  let parsedInput: any = undefined;
+  if (inputText) {
+    try {
+      parsedInput = JSON.parse(String(inputText || "").trim());
+    } catch {
+      parsedInput = undefined;
+    }
+  }
+  const sourceMode = resolveSourceMode(args, parsedInput);
 
-  const rawItems = sourceMode === "detect" ? buildDetectItems(args, bizTypeDefault) : buildPlanItems(args, bizTypeDefault);
+  const rawItems =
+    sourceMode === "detect"
+      ? buildDetectItems(args, bizTypeDefault, inputText, parsedInput)
+      : buildPlanItems(args, bizTypeDefault, inputText);
   const normalized = rawItems.map((it) => normalizeItem(it, bizTypeDefault)).filter(Boolean) as UpsertItem[];
   if (!normalized.length) {
     throw new Error(sourceMode === "detect" ? "no valid upsert items generated from detect input" : "no upsert items provided");

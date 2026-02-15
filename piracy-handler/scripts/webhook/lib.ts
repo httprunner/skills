@@ -7,6 +7,7 @@ import {
   must,
   pickField,
   readInput,
+  todayLocal,
   toDay,
 } from "../shared/lib";
 import { createResultSource, type ResultDataSource } from "../data/result_source";
@@ -325,7 +326,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   const tf = taskFields();
   const wf = webhookFields();
 
-  const day = opts.day || new Date().toISOString().slice(0, 10);
+  const day = opts.day || todayLocal();
   const dayMs = dayStartMs(day);
 
   const planRows = await searchRecords(
