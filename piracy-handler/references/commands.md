@@ -63,50 +63,55 @@ npx tsx scripts/piracy_create_subtasks.ts --input ~/.eval/123456/detect.json
 npx tsx scripts/piracy_create_subtasks.ts --task-id 123456 --dry-run
 ```
 
-## 3. piracy_upsert_webhook_plans.ts
+## 3. upsert_webhook_plan.ts
 
-基于 detect.json 创建/更新 webhook 计划。
+统一 webhook plan 入口：支持 detect.json 与通用 plan 两种输入。
 
 ```bash
-npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id 123456
-npx tsx scripts/piracy_upsert_webhook_plans.ts --input ~/.eval/123456/detect.json --biz-type piracy_general_search
-npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id 123456 --dry-run
+# detect 输入（推荐用于 piracy 主流程）
+npx tsx scripts/upsert_webhook_plan.ts --source detect --parent-task-id 123456
+npx tsx scripts/upsert_webhook_plan.ts --source detect --input ~/.eval/123456/detect.json --biz-type piracy_general_search
+npx tsx scripts/upsert_webhook_plan.ts --source detect --parent-task-id 123456 --dry-run
+
+# 通用 plan 输入（JSON/JSONL）
+npx tsx scripts/upsert_webhook_plan.ts --source plan --input plans.jsonl
+npx tsx scripts/upsert_webhook_plan.ts --source plan --group-id "微信视频号_123_xxx" --task-id 111,222 --date 2026-02-15
 ```
 
-## 4. piracy_pipeline_supabase.ts
+## 4. piracy_pipeline.ts
 
-兼容入口：一条命令跑 `detect + create_subtasks + upsert_webhook_plans`。
+兼容入口：一条命令跑 `detect + create_subtasks + upsert_webhook_plan`。
 
 ```bash
-npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113
-npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113 --dry-run
+npx tsx scripts/piracy_pipeline.ts --task-ids 69111,69112,69113
+npx tsx scripts/piracy_pipeline.ts --task-ids 69111,69112,69113 --dry-run
 ```
 
-## 5. dispatch_webhook.ts
+## 5. webhook.ts
 
-按 `task-id` 或 `group-id` 推送单组 webhook。
-
-```bash
-npx tsx scripts/dispatch_webhook.ts --task-id 123456 --data-source sqlite
-npx tsx scripts/dispatch_webhook.ts --group-id "微信视频号_123_xxx" --date 2026-02-15 --data-source supabase --table capture_results
-npx tsx scripts/dispatch_webhook.ts --task-id 123456 --dry-run
-```
-
-## 6. reconcile_webhook.ts
-
-按日期批量重试 `pending/failed` webhook 计划。
+统一 webhook 入口，支持单组触发与批量补偿。
 
 ```bash
-npx tsx scripts/reconcile_webhook.ts --date 2026-02-15 --data-source sqlite
-npx tsx scripts/reconcile_webhook.ts --date 2026-02-15 --data-source supabase --table capture_results --limit 100
-npx tsx scripts/reconcile_webhook.ts --date 2026-02-15 --dry-run
+# 单组触发（按 task-id 或 group-id）
+npx tsx scripts/webhook.ts --mode single --task-id 123456 --data-source sqlite
+npx tsx scripts/webhook.ts --mode single --group-id "微信视频号_123_xxx" --date 2026-02-15 --data-source supabase --table capture_results
+
+# 批量补偿（按日期扫描 pending/failed）
+npx tsx scripts/webhook.ts --mode reconcile --date 2026-02-15 --data-source sqlite
+npx tsx scripts/webhook.ts --mode reconcile --date 2026-02-15 --data-source supabase --table capture_results --limit 100
+
+# 自动模式（默认）：传 task/group 走 single，否则走 reconcile
+npx tsx scripts/webhook.ts --task-id 123456 --dry-run
+npx tsx scripts/webhook.ts --date 2026-02-15 --dry-run
 ```
 
 主要参数：
 
-- `--date`：扫描日期
+- `--mode auto|single|reconcile`：运行模式（默认 `auto`）
+- `--task-id/--group-id`：single 模式入口参数
+- `--date`：single/reconcile 的日期（single 不传时默认今天）
 - `--biz-type`：业务类型（默认 `piracy_general_search`）
-- `--limit`：最大处理条数（默认 `50`）
+- `--limit`：reconcile 最大处理条数（默认 `50`）
 - `--data-source sqlite|supabase`：payload 采集结果来源
 - `--db-path`：sqlite 路径（sqlite 模式）
 - `--table --page-size --timeout-ms`：Supabase 参数（supabase 模式）
@@ -116,18 +121,7 @@ ready 语义说明：
 - 组内任务全部为 `success|error` 才会触发 webhook；
 - `failed` 任务不会触发 ready，仅进入后续 reconcile 重试路径。
 
-## 7. upsert_webhook_plan.ts
-
-通用 webhook 计划 upsert。
-
-```bash
-npx tsx scripts/upsert_webhook_plan.ts --input plans.jsonl
-npx tsx scripts/upsert_webhook_plan.ts --group-id "微信视频号_123_xxx" --task-id 111,222 --date 2026-02-15
-```
-
-输入字段：`group_id`、`date`、`task_ids`（必填）；`biz_type`、`drama_info`（可选）。
-
-## 8. whitelist_check.ts
+## 6. whitelist_check.ts
 
 豁免检查（调用 `GET /drama/exemption`）。
 

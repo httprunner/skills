@@ -4,11 +4,9 @@
 
 - `scripts/piracy_detect.ts`: detect 阶段入口（支持 sqlite/supabase）。
 - `scripts/piracy_create_subtasks.ts`: 基于 `detect.json` 创建子任务。
-- `scripts/piracy_upsert_webhook_plans.ts`: 基于 `detect.json` upsert webhook 计划。
-- `scripts/piracy_pipeline_supabase.ts`: 兼容入口（detect + create + upsert）。
-- `scripts/dispatch_webhook.ts`: 单 group 推送 webhook。
-- `scripts/reconcile_webhook.ts`: 按日期补偿 pending/failed 计划。
-- `scripts/upsert_webhook_plan.ts`: 通用 webhook plan upsert 工具。
+- `scripts/upsert_webhook_plan.ts`: webhook plan 统一入口（支持 detect 输入与通用 plan 输入）。
+- `scripts/piracy_pipeline.ts`: 兼容入口（detect + create + upsert）。
+- `scripts/webhook.ts`: webhook 统一入口（单 group 推送 + 按日期批量补偿）。
 - `scripts/whitelist_check.ts`: 调用 crawler exemption 接口。
 
 ## Shared Modules

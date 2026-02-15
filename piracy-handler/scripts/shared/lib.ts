@@ -182,20 +182,6 @@ export function runTaskCreate(jsonl: string) {
   return String(run.stdout || "");
 }
 
-export function runWebhookPlanUpsert(jsonl: string, dryRun: boolean, bizType: string) {
-  const args = ["tsx", "scripts/upsert_webhook_plan.ts", "--input", "-", "--biz-type", bizType];
-  if (dryRun) args.push("--dry-run");
-  const run = spawnSync("npx", args, {
-    cwd: path.resolve(__dirname, "../.."),
-    encoding: "utf-8",
-    env: process.env,
-    input: jsonl,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  if (run.status !== 0) throw new Error(`upsert_webhook_plan failed: ${run.stderr || run.stdout}`);
-  return String(run.stdout || "");
-}
-
 export function runDramaFetchMeta(args: string[]): Record<string, string>[] {
   const run = spawnSync("npx", ["tsx", "scripts/drama_fetch.ts", "--format", "meta", ...args], {
     cwd: taskManagerDir(),

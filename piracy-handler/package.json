@@ -6,12 +6,10 @@
   "scripts": {
     "detect": "tsx scripts/piracy_detect.ts",
     "create-subtasks": "tsx scripts/piracy_create_subtasks.ts",
-    "upsert-webhook-plans": "tsx scripts/piracy_upsert_webhook_plans.ts",
-    "dispatch": "tsx scripts/dispatch_webhook.ts",
-    "reconcile": "tsx scripts/reconcile_webhook.ts",
+    "webhook": "tsx scripts/webhook.ts",
     "upsert-plan": "tsx scripts/upsert_webhook_plan.ts",
     "whitelist-check": "tsx scripts/whitelist_check.ts",
-    "pipeline-supabase": "tsx scripts/piracy_pipeline_supabase.ts"
+    "pipeline": "tsx scripts/piracy_pipeline.ts"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

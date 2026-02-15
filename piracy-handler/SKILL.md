@@ -14,22 +14,22 @@ description: 盗版检测与后置处理编排器。Use when wechat-search-colle
 ```bash
 npx tsx scripts/piracy_detect.ts --task-ids <TASK_ID[,TASK_ID2,...]> --data-source <sqlite|supabase>
 npx tsx scripts/piracy_create_subtasks.ts --task-id <PARENT_TASK_ID>
-npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <PARENT_TASK_ID>
+npx tsx scripts/upsert_webhook_plan.ts --source detect --parent-task-id <PARENT_TASK_ID>
 ```
 
 ### B. 一条命令全流程（兼容入口）
 
 ```bash
-npx tsx scripts/piracy_pipeline_supabase.ts --task-ids <TASK_ID_1,TASK_ID_2,...>
+npx tsx scripts/piracy_pipeline.ts --task-ids <TASK_ID_1,TASK_ID_2,...>
 ```
 
-说明：`piracy_pipeline_supabase.ts` 保留为兼容壳，内部复用 detect runner + create/upsert。
+说明：`piracy_pipeline.ts` 保留为兼容壳，内部复用 detect runner + create/upsert。
 
 ### C. webhook 触发与补偿
 
 ```bash
-npx tsx scripts/dispatch_webhook.ts --task-id <TASK_ID> --data-source <sqlite|supabase>
-npx tsx scripts/reconcile_webhook.ts --date <YYYY-MM-DD> --data-source <sqlite|supabase>
+npx tsx scripts/webhook.ts --mode single --task-id <TASK_ID> --data-source <sqlite|supabase>
+npx tsx scripts/webhook.ts --mode reconcile --date <YYYY-MM-DD> --data-source <sqlite|supabase>
 ```
 
 ## 2) 职责边界
@@ -45,12 +45,10 @@ npx tsx scripts/reconcile_webhook.ts --date <YYYY-MM-DD> --data-source <sqlite|s
 作用：按 TaskID（或从飞书筛选）生成 detect.json；支持 sqlite/supabase 数据源；检测仅纳入 `status=success` 的综合页任务结果，ratio 采用 `>=` 阈值判定。
 - `scripts/piracy_create_subtasks.ts`
 作用：基于 detect.json 创建子任务（个人页/合集/锚点）。
-- `scripts/piracy_upsert_webhook_plans.ts`
-作用：基于 detect.json upsert webhook 计划。
-- `scripts/dispatch_webhook.ts`
-作用：单 group webhook 推送（按 task-id 或 group-id 触发）。
-- `scripts/reconcile_webhook.ts`
-作用：按日期重试 pending/failed webhook 计划。
+- `scripts/upsert_webhook_plan.ts`
+作用：webhook plan 唯一入口；支持 `--source detect`（从 detect.json 产出计划）与 `--source plan`（通用计划输入）。
+- `scripts/webhook.ts`
+作用：webhook 统一入口；`--mode single` 用于单 group 触发，`--mode reconcile` 用于按日期批量补偿。
 
 ## 4) 公共模块（重构后）
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { chunk, defaultDetectPath, parsePositiveInt, readInput as readTextInput, runTaskFetch } from "./shared/lib";
 import {
   batchCreate,
   batchUpdate,
   dayStartMs,
   env,
-  expandHome,
   type FeishuCtx,
   getTenantToken,
   must,
@@ -17,7 +17,9 @@ import {
 } from "./webhook/lib";
 
 type CLIOptions = {
+  source: string;
   input?: string;
+  parentTaskId?: string;
   groupId?: string;
   date?: string;
   bizType: string;
@@ -28,11 +30,11 @@ type CLIOptions = {
 
 type UpsertItem = {
   group_id: string;
-  date: string; // yyyy-mm-dd
+  date: string;
   biz_type?: string;
   app?: string;
   task_ids: number[];
-  drama_info?: string; // JSON string
+  drama_info?: string;
 };
 
 function encodeTaskIDsByStatus(taskIDs: number[]): string {
@@ -44,9 +46,6 @@ function parseItems(inputText: string): UpsertItem[] {
   const txt = String(inputText || "").trim();
   if (!txt) return [];
   if (txt.startsWith("{") || txt.startsWith("[")) {
-    // Accept both JSON and JSONL:
-    // - JSON object / array: parse directly
-    // - JSONL: fallback to line-by-line parsing when direct parse fails
     try {
       const j = JSON.parse(txt);
       if (Array.isArray(j)) return j as UpsertItem[];
@@ -109,13 +108,15 @@ function parseCLI(argv: string[]): CLIOptions {
   const program = new Command();
   program
     .name("upsert_webhook_plan")
-    .description("Upsert webhook plans in WEBHOOK_BITABLE_URL by (BizType, GroupID, Date)")
-    .option("--input <path>", "Input JSON/JSONL file (use - for stdin)")
-    .option("--group-id <id>", "Single GroupID")
-    .option("--date <yyyy-mm-dd>", "Capture day (default: today)", new Date().toISOString().slice(0, 10))
+    .description("Single webhook upsert entry: from detect output or from plan input")
+    .option("--source <type>", "Input source: auto|detect|plan", "auto")
+    .option("--input <path>", "Input file path; detect.json or plan JSON/JSONL (use - for stdin)")
+    .option("--parent-task-id <id>", "Detect source parent TaskID; read ~/.eval/<TaskID>/detect.json when --input omitted")
+    .option("--group-id <id>", "Plan source: single GroupID")
+    .option("--date <yyyy-mm-dd>", "Plan source capture day (default: today)", new Date().toISOString().slice(0, 10))
     .option("--biz-type <name>", "BizType", "piracy_general_search")
-    .option("--task-id <csv>", "TaskID(s), comma-separated (e.g. 111 or 111,222,333)")
-    .option("--drama-info <json>", "DramaInfo JSON string")
+    .option("--task-id <csv>", "Plan source TaskID(s), comma-separated (e.g. 111 or 111,222,333)")
+    .option("--drama-info <json>", "Plan source DramaInfo JSON string")
     .option("--dry-run", "Compute only, do not write records")
     .showHelpAfterError()
     .showSuggestionAfterError();
@@ -123,28 +124,166 @@ function parseCLI(argv: string[]): CLIOptions {
   return program.opts<CLIOptions>();
 }
 
+function mapAppLabel(app: string): string {
+  const trimmed = String(app || "").trim();
+  if (!trimmed) return "";
+  const m: Record<string, string> = {
+    "com.smile.gifmaker": "快手",
+    "com.tencent.mm": "微信视频号",
+    "com.eg.android.AlipayGphone": "支付宝",
+  };
+  return m[trimmed] || trimmed;
+}
+
+function looksLikeDetectOutput(v: any): boolean {
+  return Boolean(v && typeof v === "object" && Number(v.parent_task_id) > 0 && Array.isArray(v.selected_groups));
+}
+
+function parseDetectObjectFromText(txt: string): any {
+  try {
+    const v = JSON.parse(String(txt || "").trim());
+    if (!looksLikeDetectOutput(v)) throw new Error("input is not a valid detect output object");
+    return v;
+  } catch (err) {
+    throw new Error(`failed to parse detect input: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function buildUpsertItemsFromDetect(detect: any, bizType: string): UpsertItem[] {
+  const parentTaskID = Math.trunc(Number(detect?.parent_task_id));
+  const day = String(detect?.day || "").trim();
+  const dayMs = Math.trunc(Number(detect?.day_ms || 0));
+  const selected = Array.isArray(detect?.selected_groups) ? detect.selected_groups : [];
+
+  if (!parentTaskID || !day) throw new Error("invalid detect input: missing parent_task_id/day");
+
+  const groupsByApp = new Map<string, any[]>();
+  for (const g of selected) {
+    const app = String(g?.app || "").trim();
+    const groupID = String(g?.group_id || "").trim();
+    if (!app || !groupID) continue;
+    const arr = groupsByApp.get(app) || [];
+    arr.push(g);
+    groupsByApp.set(app, arr);
+  }
+
+  const taskIDsByGroup = new Map<string, number[]>();
+  for (const [app, groups] of groupsByApp.entries()) {
+    const ids = Array.from(new Set(groups.map((g) => String(g?.group_id || "").trim()).filter(Boolean)));
+    for (const batch of chunk(ids, 40)) {
+      const tasks = runTaskFetch([
+        "--group-id",
+        batch.join(","),
+        "--app",
+        app,
+        "--scene",
+        "Any",
+        "--status",
+        "Any",
+        "--date",
+        day,
+      ]);
+      for (const t of tasks) {
+        const gid = String((t as any)?.group_id || "").trim();
+        const tid = Math.trunc(Number((t as any)?.task_id));
+        if (!gid || !Number.isFinite(tid) || tid <= 0) continue;
+        const arr = taskIDsByGroup.get(gid) || [];
+        arr.push(tid);
+        taskIDsByGroup.set(gid, arr);
+      }
+    }
+  }
+
+  const out: UpsertItem[] = [];
+  for (const g of selected) {
+    const groupID = String(g?.group_id || "").trim();
+    if (!groupID) continue;
+    const tids = Array.from(new Set([parentTaskID, ...(taskIDsByGroup.get(groupID) || [])])).sort((a, b) => a - b);
+    if (!tids.length) continue;
+
+    const drama = g?.drama || {};
+    const dramaInfoObj = {
+      CaptureDate: String(dayMs || ""),
+      DramaID: String(g?.book_id || "").trim(),
+      DramaName: String(drama?.name || g?.params || "").trim(),
+      EpisodeCount: String(drama?.episode_count || "").trim(),
+      Priority: String(drama?.priority || "").trim(),
+      RightsProtectionScenario: String(drama?.rights_protection_scenario || "").trim(),
+      TotalDuration: String(drama?.total_duration_sec ?? ""),
+      CaptureDuration: String(g?.capture_duration_sec ?? ""),
+      GeneralSearchRatio: `${(Number(g?.ratio || 0) * 100).toFixed(2)}%`,
+    };
+
+    out.push({
+      group_id: groupID,
+      date: day,
+      biz_type: bizType,
+      app: mapAppLabel(String(g?.app || "").trim()),
+      task_ids: tids,
+      drama_info: JSON.stringify(dramaInfoObj),
+    });
+  }
+
+  return out;
+}
+
+function resolveSourceMode(args: CLIOptions): "detect" | "plan" {
+  const source = String(args.source || "auto").trim().toLowerCase();
+  if (source === "detect" || source === "plan") return source;
+  if (source !== "auto") throw new Error(`invalid --source: ${args.source}; expected auto|detect|plan`);
+
+  if (String(args.parentTaskId || "").trim()) return "detect";
+  if (String(args.groupId || "").trim()) return "plan";
+  if (String(args.input || "").trim()) {
+    const txt = readInput(String(args.input));
+    try {
+      const parsed = JSON.parse(String(txt || "").trim());
+      return looksLikeDetectOutput(parsed) ? "detect" : "plan";
+    } catch {
+      return "plan";
+    }
+  }
+  throw new Error("cannot resolve source mode; use --source or provide --parent-task-id/--group-id/--input");
+}
+
+function buildPlanItems(args: CLIOptions, bizTypeDefault: string): UpsertItem[] {
+  if (args.input) return parseItems(readInput(args.input));
+  if (!args.groupId) return [];
+  return [
+    {
+      group_id: String(args.groupId).trim(),
+      date: String(args.date || "").trim(),
+      biz_type: bizTypeDefault,
+      task_ids: parseTaskIDs(args.taskId),
+      drama_info: String(args.dramaInfo || "").trim() || undefined,
+    },
+  ];
+}
+
+function buildDetectItems(args: CLIOptions, bizTypeDefault: string): UpsertItem[] {
+  let detectObj: any;
+  if (args.input) {
+    detectObj = parseDetectObjectFromText(readTextInput(String(args.input)));
+  } else {
+    const tidRaw = String(args.parentTaskId || "").trim();
+    if (!tidRaw) throw new Error("detect source requires --input or --parent-task-id");
+    const tid = parsePositiveInt(tidRaw, "--parent-task-id");
+    detectObj = parseDetectObjectFromText(readTextInput(defaultDetectPath(tid)));
+  }
+  return buildUpsertItemsFromDetect(detectObj, bizTypeDefault);
+}
+
 async function main() {
   const args = parseCLI(process.argv);
   const dryRun = Boolean(args.dryRun);
   const bizTypeDefault = String(args.bizType || "piracy_general_search").trim();
+  const sourceMode = resolveSourceMode(args);
 
-  let items: UpsertItem[] = [];
-  if (args.input) {
-    items = parseItems(readInput(args.input));
-  } else if (args.groupId) {
-    items = [
-      {
-        group_id: String(args.groupId).trim(),
-        date: String(args.date || "").trim(),
-        biz_type: bizTypeDefault,
-        task_ids: parseTaskIDs(args.taskId),
-        drama_info: String(args.dramaInfo || "").trim() || undefined,
-      },
-    ];
+  const rawItems = sourceMode === "detect" ? buildDetectItems(args, bizTypeDefault) : buildPlanItems(args, bizTypeDefault);
+  const normalized = rawItems.map((it) => normalizeItem(it, bizTypeDefault)).filter(Boolean) as UpsertItem[];
+  if (!normalized.length) {
+    throw new Error(sourceMode === "detect" ? "no valid upsert items generated from detect input" : "no upsert items provided");
   }
-
-  const normalized = items.map((it) => normalizeItem(it, bizTypeDefault)).filter(Boolean) as UpsertItem[];
-  if (!normalized.length) throw new Error("no upsert items provided (use --input or --group-id + --task-id)");
 
   const appID = must("FEISHU_APP_ID");
   const appSecret = must("FEISHU_APP_SECRET");
@@ -173,9 +312,7 @@ async function main() {
     const day = normalizeDayValue(r?.fields?.[wf.Date]);
     if (!recordID || !bizType || !groupID || !day) continue;
     const key = `${bizType}@@${day}@@${groupID}`;
-    if (targetKeys.has(key) && !existingByKey.has(key)) {
-      existingByKey.set(key, { recordID });
-    }
+    if (targetKeys.has(key) && !existingByKey.has(key)) existingByKey.set(key, { recordID });
   }
 
   const createRows: Array<{ fields: Record<string, any> }> = [];
@@ -236,7 +373,14 @@ async function main() {
     }
   }
 
-  const summary = { dry_run: dryRun, input_items: normalized.length, created: createRows.length, updated: updateRows.length, errors };
+  const summary = {
+    source: sourceMode,
+    dry_run: dryRun,
+    input_items: normalized.length,
+    created: createRows.length,
+    updated: updateRows.length,
+    errors,
+  };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
 

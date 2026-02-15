@@ -32,8 +32,8 @@ type CLIOptions = {
 function parseCLI(argv: string[]): CLIOptions {
   const program = new Command();
   program
-    .name("piracy_pipeline_supabase")
-    .description("Compatibility shell: run detect/create/upsert pipeline with Supabase result source")
+    .name("piracy_pipeline")
+    .description("Compatibility shell: run detect/create/upsert pipeline")
     .option("--task-ids <csv>", "Comma-separated TaskID list, e.g. 69111,69112,69113")
     .option("--from-feishu", "Select parent tasks from task-status Bitable, then merge by BookID")
     .option("--task-app <app>", "Feishu task filter: App")
@@ -53,7 +53,7 @@ function parseCLI(argv: string[]): CLIOptions {
     .option("--date <yyyy-mm-dd>", "Override capture day")
     .option("--dry-run", "Compute and print, skip writes in create/upsert")
     .option("--skip-create-subtasks", "Skip creating child tasks")
-    .option("--skip-upsert-webhook-plans", "Skip upserting webhook plans")
+    .option("--skip-upsert-webhook-plans", "Skip upserting webhook plan records")
     .showHelpAfterError()
     .showSuggestionAfterError();
   program.parse(argv);
@@ -76,7 +76,7 @@ function runLocalScript(scriptName: string, args: string[]) {
 
 async function main() {
   const args = parseCLI(process.argv);
-  process.stderr.write("[piracy-handler] piracy_pipeline_supabase is kept for compatibility and internally reuses piracy_detect flow\n");
+  process.stderr.write("[piracy-handler] piracy_pipeline is a compatibility shell and internally reuses piracy_detect flow\n");
   const output = String(args.output || "").trim();
   if (output === "-") throw new Error("--output - is not supported in pipeline mode");
 
@@ -137,9 +137,9 @@ async function main() {
     }
 
     if (!args.skipUpsertWebhookPlans) {
-      const upsertArgs = ["--input", r.outputPath, "--biz-type", String(args.bizType || "piracy_general_search")];
+      const upsertArgs = ["--source", "detect", "--input", r.outputPath, "--biz-type", String(args.bizType || "piracy_general_search")];
       if (args.dryRun) upsertArgs.push("--dry-run");
-      runLocalScript("piracy_upsert_webhook_plans.ts", upsertArgs);
+      runLocalScript("upsert_webhook_plan.ts", upsertArgs);
     }
   }
 
