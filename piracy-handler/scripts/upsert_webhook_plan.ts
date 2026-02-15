@@ -40,9 +40,16 @@ function parseItems(inputText: string): UpsertItem[] {
   const txt = String(inputText || "").trim();
   if (!txt) return [];
   if (txt.startsWith("{") || txt.startsWith("[")) {
-    const j = JSON.parse(txt);
-    if (Array.isArray(j)) return j as UpsertItem[];
-    return [j as UpsertItem];
+    // Accept both JSON and JSONL:
+    // - JSON object / array: parse directly
+    // - JSONL: fallback to line-by-line parsing when direct parse fails
+    try {
+      const j = JSON.parse(txt);
+      if (Array.isArray(j)) return j as UpsertItem[];
+      return [j as UpsertItem];
+    } catch {
+      // continue to JSONL parsing below
+    }
   }
   const lines = txt
     .split("\n")

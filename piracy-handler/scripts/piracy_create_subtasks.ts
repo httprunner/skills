@@ -81,6 +81,8 @@ async function main() {
   }
 
   const creates: any[] = [];
+  const parentTaskField = process.env.TASK_FIELD_PARENT_TASK_ID || "ParentTaskID";
+  const dateField = process.env.TASK_FIELD_DATE || "Date";
   for (const g of selected) {
     const groupID = String(g?.group_id || "").trim();
     if (!groupID || existingGroupIDs.has(groupID)) continue;
@@ -99,10 +101,15 @@ async function main() {
       book_id: bookID,
       user_id: userID,
       user_name: userName,
-      parent_task_id: String(parentTaskID),
-      date: String(dayMs || day),
+      parent_task_id: parentTaskID,
+      date: dayMs || day,
       params,
       status: "pending",
+      // Force numeric payload for number/date columns to avoid Feishu NumberFieldConvFail.
+      fields: {
+        [parentTaskField]: parentTaskID,
+        ...(dayMs > 0 ? { [dateField]: dayMs } : {}),
+      },
     };
 
     creates.push({ ...base, scene: "个人页搜索" });
@@ -130,8 +137,8 @@ async function main() {
     return;
   }
 
-  const jsonl = creates.map((x) => JSON.stringify(x)).join("\n") + "\n";
-  const stdout = runTaskCreate(jsonl);
+  const payload = JSON.stringify(creates);
+  const stdout = runTaskCreate(payload);
   process.stdout.write(stdout || "");
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }

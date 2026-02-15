@@ -63,7 +63,11 @@ export function parseTaskIDs(v: any): number[] {
 export type BitableRef = { appToken: string; tableID: string; viewID: string; wikiToken: string };
 
 export function parseBitableURL(raw: string): BitableRef {
-  const u = new URL(raw);
+  const normalized = String(raw || "")
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\\([?=&])/g, "$1");
+  const u = new URL(normalized);
   const seg = u.pathname.split("/").filter(Boolean);
   let appToken = "";
   let wikiToken = "";

@@ -21,6 +21,17 @@ npx tsx scripts/piracy_upsert_webhook_plans.ts --task-id <TASK_ID>
 2. **create_subtasks** — 为命中分组创建子任务（个人页搜索/合集视频采集/视频锚点采集）
 3. **upsert_webhook_plans** — 为命中分组写入 webhook 推送计划
 
+### Supabase 多任务后置（一条命令）
+
+```bash
+npx tsx scripts/piracy_pipeline_supabase.ts --task-ids <TASK_ID_1,TASK_ID_2,...>
+```
+
+适用于同一 `BookID` 的多个综合页任务分布在不同节点执行的场景。该脚本会：
+1. 从 Supabase `capture_results` 读取指定 `task_id` 列表数据
+2. 复用当前 `piracy_detect` 一致的检测逻辑产出 `detect.json`
+3. 调用现有 `piracy_create_subtasks` 与 `piracy_upsert_webhook_plans`
+
 ### Webhook 触发（子任务终态后）
 
 ```bash
@@ -54,3 +65,4 @@ npx tsx scripts/whitelist_check.ts --book-id <BOOK_ID> --account-id <ACCOUNT_ID>
 | `DRAMA_BITABLE_URL` | 剧单元信息表（detect 用） |
 | `WEBHOOK_BITABLE_URL` | 推送计划表 |
 | `CRAWLER_SERVICE_BASE_URL` | webhook 推送与豁免检查服务 |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | `piracy_pipeline_supabase.ts` 从中心库读取采集结果 |

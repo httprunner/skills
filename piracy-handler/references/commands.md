@@ -11,6 +11,8 @@ export TASK_BITABLE_URL="https://.../base/...?...table=tbl_task"
 export DRAMA_BITABLE_URL="https://.../base/...?...table=tbl_drama"
 export WEBHOOK_BITABLE_URL="https://.../base/...?...table=tbl_webhook"
 export CRAWLER_SERVICE_BASE_URL="https://..."   # webhook 推送 + 豁免检查
+export SUPABASE_URL="https://<project>.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="..."
 ```
 
 ## piracy_detect.ts
@@ -42,8 +44,36 @@ npx tsx scripts/piracy_detect.ts --task-id 123456 --db-path ~/.eval/records.sqli
   - `group_id`, `app`, `book_id`, `user_id`, `user_name`, `params`
   - `capture_duration_sec`, `ratio`
   - `collection_item_id`, `anchor_links[]`
-  - `drama { name, episode_count, rights_protection_scenario, priority, total_duration_sec }`
+- `drama { name, episode_count, rights_protection_scenario, priority, total_duration_sec }`
 - `summary`：`resolved_task_count`, `unresolved_task_ids[]`, `missing_drama_meta_book_ids[]`, `invalid_drama_duration_book_ids[]`, `groups_above_threshold`
+
+## piracy_pipeline_supabase.ts
+
+从 Supabase 按多 TaskID 读取 `capture_results`，执行同款盗版检测，再创建子任务与 webhook 计划。
+
+```bash
+# 全流程（detect + create_subtasks + upsert_webhook_plans）
+npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113
+
+# 仅做检测并预览，不写表
+npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113 --dry-run
+
+# 只产出 detect.json（跳过后两步）
+npx tsx scripts/piracy_pipeline_supabase.ts --task-ids 69111,69112,69113 --skip-create-subtasks --skip-upsert-webhook-plans
+```
+
+| Flag | 说明 | 默认值 |
+|---|---|---|
+| `--task-ids` (必填) | 逗号分隔 TaskID 列表 | - |
+| `--parent-task-id` | detect 输出中的父任务ID（默认取 task-ids 第一项） | 第一项 |
+| `--table` | Supabase 结果表名 | `SUPABASE_RESULT_TABLE` 或 `capture_results` |
+| `--page-size` | Supabase 分页拉取大小 | `1000` |
+| `--timeout-ms` | Supabase HTTP 超时（毫秒） | `30000` |
+| `--threshold` | 采集/总时长阈值 | `0.5` |
+| `--output` | detect.json 输出路径 | `~/.eval/<ParentTaskID>/detect.json` |
+| `--dry-run` | 创建子任务和 webhook 仅计算不写入 | false |
+| `--skip-create-subtasks` | 跳过创建子任务 | false |
+| `--skip-upsert-webhook-plans` | 跳过 webhook 计划 upsert | false |
 
 ## piracy_create_subtasks.ts
 
