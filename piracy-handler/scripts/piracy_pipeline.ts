@@ -4,7 +4,7 @@ import { spawnSync } from "child_process";
 import path from "path";
 import { env, toNumber } from "./shared/lib";
 import { precheckUnitsByItemsCollected } from "./detect/precheck";
-import { resolveDetectTaskUnitsDetailed } from "./detect/task_units";
+import { resolveDetectTaskUnitsDetailed, type DetectSkippedUnit } from "./detect/task_units";
 import { runDetectForUnits } from "./detect/runner";
 
 type CLIOptions = {
@@ -68,6 +68,29 @@ function runLocalScript(scriptName: string, args: string[]) {
   if (run.stderr) process.stderr.write(run.stderr);
 }
 
+function pickStringArrayField(details: Record<string, unknown> | undefined, key: string): string[] {
+  const raw = details?.[key];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => String(x || "").trim()).filter(Boolean);
+}
+
+function pickNumberArrayField(details: Record<string, unknown> | undefined, key: string): number[] {
+  const raw = details?.[key];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((x) => Math.trunc(Number(x)))
+    .filter((x) => Number.isFinite(x) && x > 0);
+}
+
+function formatSkippedMark(unit: DetectSkippedUnit): string {
+  if (unit.reason !== "status_not_terminal") return `blocked(${unit.reason})`;
+  const statuses = pickStringArrayField(unit.details, "non_terminal_statuses");
+  const nonTerminalTaskIDs = pickNumberArrayField(unit.details, "non_terminal_task_ids");
+  if (!statuses.length) return "blocked";
+  if (!nonTerminalTaskIDs.length) return `blocked(${statuses.join("|")})`;
+  return `blocked(${statuses.join("|")};tasks=${nonTerminalTaskIDs.join(",")})`;
+}
+
 async function main() {
   const args = parseCLI(process.argv);
   process.stderr.write("[piracy-handler] piracy_pipeline is a compatibility shell and internally reuses piracy_detect flow\n");
@@ -102,6 +125,17 @@ async function main() {
     console.log(
       `[${idx + 1}/${units.length}] App=${u.parent.app || "-"} BookID=${u.parent.book_id || "-"} Date=${u.day} TaskCount=${u.taskIDs.length}`,
     );
+  }
+  if (skippedBeforePrecheck.length > 0) {
+    console.log("----------------------------------------");
+    console.log("PIRACY PIPELINE SKIPPED GROUPS");
+    console.log("----------------------------------------");
+    for (const [idx, s] of skippedBeforePrecheck.entries()) {
+      const mark = formatSkippedMark(s);
+      console.log(
+        `[S${idx + 1}/${skippedBeforePrecheck.length}] App=${s.app || "-"} BookID=${s.book_id || "-"} Date=${s.day || "-"} Status=${mark} TaskIDs=${s.task_ids.join(",")}`,
+      );
+    }
   }
   console.log("========================================");
 

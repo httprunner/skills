@@ -110,8 +110,8 @@ npx tsx scripts/piracy_pipeline.ts \
 - 任务分组键为 `App + BookID + Date`
 - 若分组内存在 `status != success|error`，整组跳过
 - 若分组内任一任务 `ItemsCollected` 为空或非数字，整组跳过
-- 从 `capture_results` 按分组 `task_ids` 拉取结果后，使用 `distinct item_id` 计数
-- 仅当 `distinct_item_count == sum(ItemsCollected)` 时分组进入 detect
+- 从 `capture_results` 按分组 `task_ids` 拉取结果后，按 `task_id` 分别统计 `distinct item_id`（空 `item_id` 使用行级 fallback）
+- 仅当分组内每个任务都满足 `observed_distinct_item_count == ItemsCollected` 时分组进入 detect
 - 仅 detect 命中组会创建个人页任务并 upsert webhook plan
 
 ## 5. webhook.ts

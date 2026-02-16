@@ -5,6 +5,7 @@ export type DetectTaskUnit = {
   taskIDs: number[];
   day: string;
   sumItemsCollected: number;
+  taskItemsCollected: Record<number, number>;
   parent: {
     app: string;
     book_id: string;
@@ -158,8 +159,8 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
     const taskIDs = Array.from(new Set(bucket.map((x) => x.task_id))).sort((a, b) => a - b);
 
     const nonTerminal = bucket
-      .map((x) => normalizeText(x.status))
-      .filter((x) => x !== "success" && x !== "error");
+      .map((x) => ({ taskID: x.task_id, status: normalizeText(x.status) }))
+      .filter((x) => x.status !== "success" && x.status !== "error");
     if (nonTerminal.length > 0) {
       skippedUnits.push({
         app,
@@ -168,7 +169,8 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
         task_ids: taskIDs,
         reason: "status_not_terminal",
         details: {
-          non_terminal_statuses: Array.from(new Set(nonTerminal)).sort(),
+          non_terminal_statuses: Array.from(new Set(nonTerminal.map((x) => x.status).filter(Boolean))).sort(),
+          non_terminal_task_ids: Array.from(new Set(nonTerminal.map((x) => x.taskID))).sort((a, b) => a - b),
         },
       });
       markReason(reasonCounter, "status_not_terminal");
@@ -176,6 +178,7 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
     }
 
     let sumItemsCollected = 0;
+    const taskItemsCollected: Record<number, number> = {};
     let hasInvalidItemsCollected = false;
     const invalidTaskIDs: number[] = [];
     for (const t of bucket) {
@@ -186,6 +189,7 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
         continue;
       }
       sumItemsCollected += parsedItems.value;
+      taskItemsCollected[t.task_id] = parsedItems.value;
     }
 
     if (hasInvalidItemsCollected) {
@@ -208,6 +212,7 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
       taskIDs,
       day,
       sumItemsCollected,
+      taskItemsCollected,
       parent: {
         app: app || String(parentTask.app || "").trim(),
         book_id: bookID,
