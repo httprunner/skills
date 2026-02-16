@@ -39,7 +39,83 @@ export type DispatchResult = {
   task_ids: number[];
   task_ids_by_status: Record<string, number[]>;
   reason?: string;
+  // Debug-only: present in dry-run outputs.
+  records_by_task_id?: Record<string, { total: number; items: string[] }>;
+  payload_record_count?: number;
+  debug?: Record<string, unknown>;
 };
+
+const TASK_ID_FIELDS = ["task_id", "TaskID"] as const;
+const ITEM_ID_FIELDS = ["ItemID", "item_id", "id", "ID"] as const;
+
+const SCENE_GENERAL_SEARCH = "综合页搜索";
+
+function parseGroupUserKey(groupID: string) {
+  const trimmed = String(groupID || "").trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split("_");
+  if (parts.length < 3) return "";
+  return String(parts[parts.length - 1] || "").trim();
+}
+
+function equalFold(a: string, b: string) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
+function decodeCommonEscapes(input: string): string {
+  if (!input) return "";
+  return input
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_, dec: string) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
+}
+
+function normalizeUserName(raw: string) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  const withoutTags = trimmed.replace(/<[^>]*>/g, "");
+  const unescaped = decodeCommonEscapes(withoutTags);
+  return normalizeKey(unescaped);
+}
+
+function deriveUserKeyFromTaskValues(userID: string, userName: string) {
+  // Match fox/search/main.go deriveUserKeyFromTask: prefer UserID, else normalized UserName.
+  const uid = normalizeKey(userID);
+  if (uid) return uid;
+  return normalizeUserName(userName);
+}
+
+function pickDominant(values: string[]) {
+  const counts = new Map<string, number>();
+  for (const v of values) {
+    const s = normalizeKey(v);
+    if (!s) continue;
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  let best = "";
+  let bestCount = 0;
+  for (const [k, c] of counts.entries()) {
+    if (c > bestCount || (c === bestCount && k < best)) {
+      best = k;
+      bestCount = c;
+    }
+  }
+  return best;
+}
+
+function resolveUserKey(userInfo: { UserAlias?: string; UserID?: string; UserName?: string }) {
+  // Match fox ResolveUserKey priority: alias > id > name.
+  return normalizeKey(userInfo.UserAlias) || normalizeKey(userInfo.UserID) || normalizeKey(userInfo.UserName);
+}
+
+// Keep the implementation aligned with fox (alias > id > name) and avoid
+// heuristics here. Grouping should already be correct via Task table.
 
 export function parseTaskIDs(v: any): number[] {
   if (v == null) return [];
@@ -323,8 +399,6 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
     return {
       records: [],
       userInfo: {},
-      recordsByTaskID: {} as Record<string, { total: number; items: string[] }>,
-      missingRecordTaskIDs: [] as number[],
     };
   }
   const source = createResultSource({
@@ -351,7 +425,7 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
   const userInfo = { UserID: userID, UserName: userName, UserAlias: userAlias, UserAuthEntity: userAuthEntity };
 
   const records = rows.map((row) => {
-    const itemID = String(pickField(row, ["item_id", "ItemID", "id", "ID"]) || "").trim();
+    const itemID = String(pickField(row, [...ITEM_ID_FIELDS]) || "").trim();
     const extra: Record<string, unknown> = {};
     const knownKeys = ["item_id", "ItemID", "id", "ID", "user_id", "UserID", "user_name", "UserName", "user_alias", "UserAlias", "user_auth_entity", "UserAuthEntity", "task_id", "TaskID", "datetime", "Datetime"];
     for (const [k, v] of Object.entries(row)) {
@@ -360,17 +434,140 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
       }
     }
     return {
+      ...row,
       ItemID: itemID,
       Extra: JSON.stringify(extra),
-      ...row,
     };
   });
 
+  return { records, userInfo };
+}
+
+function normalizeKey(v: any) {
+  return String(v || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeTaskIDsByStatus(input: any): Record<string, number[]> {
+  const obj = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, any>) : {};
+  const out: Record<string, number[]> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const key = String(k || "").trim().toLowerCase() || "unknown";
+    const ids: number[] = [];
+    if (Array.isArray(v)) {
+      for (const it of v) {
+        const n = Math.trunc(Number(it));
+        if (Number.isFinite(n) && n > 0) ids.push(n);
+      }
+    } else {
+      const n = Math.trunc(Number(v));
+      if (Number.isFinite(n) && n > 0) ids.push(n);
+    }
+    if (!out[key]) out[key] = [];
+    out[key].push(...ids);
+  }
+  for (const k of Object.keys(out)) out[k] = uniqInts(out[k]);
+  return out;
+}
+
+function parseTaskIDsByStatusCell(v: any): Record<string, number[]> {
+  if (v == null) return {};
+  if (typeof v === "object" && !Array.isArray(v) && v) {
+    const maybeRichTextCell = "text" in (v as any) || "value" in (v as any) || "type" in (v as any);
+    if (!maybeRichTextCell) return normalizeTaskIDsByStatus(v);
+  }
+  const s = firstText(v).trim();
+  if (!s) return {};
+  try {
+    const j = JSON.parse(s);
+    return normalizeTaskIDsByStatus(j);
+  } catch {
+    return {};
+  }
+}
+
+function equalTaskIDsByStatus(a: any, b: any) {
+  const aa = normalizeTaskIDsByStatus(parseTaskIDsByStatusCell(a));
+  const bb = normalizeTaskIDsByStatus(parseTaskIDsByStatusCell(b));
+  const ak = Object.keys(aa).sort();
+  const bk = Object.keys(bb).sort();
+  if (ak.length !== bk.length) return false;
+  for (let i = 0; i < ak.length; i++) {
+    if (ak[i] !== bk[i]) return false;
+    const av = aa[ak[i]] || [];
+    const bv = bb[bk[i]] || [];
+    if (av.length !== bv.length) return false;
+    for (let j = 0; j < av.length; j++) if (av[j] !== bv[j]) return false;
+  }
+  return true;
+}
+
+function pickTaskMetaFromRows(taskRows: any[], userIDField: string, userNameField: string) {
+  let userID = "";
+  let userName = "";
+  for (const r of taskRows) {
+    const f = r?.fields || {};
+    if (!userID) userID = String(firstText(f[userIDField]) || "").trim();
+    if (!userName) userName = String(firstText(f[userNameField]) || "").trim();
+    if (userID && userName) break;
+  }
+  return { UserID: userID, UserName: userName };
+}
+
+
+function readRecordTaskID(fields: Record<string, unknown>) {
+  const tid = Math.trunc(Number(pickField(fields, [...TASK_ID_FIELDS]) || 0));
+  return Number.isFinite(tid) && tid > 0 ? tid : 0;
+}
+
+function readRecordUserKey(fields: Record<string, unknown>) {
+  const alias = normalizeKey(pickField(fields, ["UserAlias", "user_alias"]));
+  if (alias) return alias;
+  const uid = normalizeKey(pickField(fields, ["UserID", "user_id"]));
+  if (uid) return uid;
+  return normalizeKey(pickField(fields, ["UserName", "user_name"]));
+}
+
+function pickFirstNonEmptyCaptureFieldByTaskIDs(
+  records: Array<Record<string, unknown>>,
+  taskIDs: number[],
+  ...fieldNames: string[]
+) {
+  const ids = uniqInts(taskIDs);
+  if (!ids.length || !records.length) return "";
+  for (const id of ids) {
+    for (const r of records) {
+      const tid = readRecordTaskID(r);
+      if (tid !== id) continue;
+      const v = normalizeKey(pickField(r, fieldNames));
+      if (v) return v;
+    }
+  }
+  return "";
+}
+
+
+function dedupRecordsByItemID(records: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const r of records) {
+    const itemID = normalizeKey(pickField(r, [...ITEM_ID_FIELDS]));
+    if (itemID) {
+      if (seen.has(itemID)) continue;
+      seen.add(itemID);
+    }
+    out.push(r);
+  }
+  return out;
+}
+
+function buildRecordsByTaskID(taskIDs: number[], records: Array<Record<string, unknown>>) {
   const itemsByTaskID = new Map<number, Set<string>>();
-  for (const row of rows) {
-    const tid = Math.trunc(Number(pickField(row, ["task_id", "TaskID"]) || 0));
+  for (const r of records) {
+    const tid = Math.trunc(Number(pickField(r, [...TASK_ID_FIELDS]) || 0));
     if (!Number.isFinite(tid) || tid <= 0) continue;
-    const itemID = String(pickField(row, ["item_id", "ItemID", "id", "ID"]) || "").trim();
+    const itemID = normalizeKey(pickField(r, [...ITEM_ID_FIELDS]));
     if (!itemID) continue;
     if (!itemsByTaskID.has(tid)) itemsByTaskID.set(tid, new Set());
     itemsByTaskID.get(tid)!.add(itemID);
@@ -380,12 +577,24 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
   const missingRecordTaskIDs: number[] = [];
   for (const tid of uniqInts(taskIDs)) {
     const set = itemsByTaskID.get(tid) || new Set<string>();
-    const items = Array.from(set);
+    const items = Array.from(set).sort();
     recordsByTaskID[String(tid)] = { total: items.length, items };
     if (!items.length) missingRecordTaskIDs.push(tid);
   }
+  return { recordsByTaskID, missingRecordTaskIDs };
+}
 
-  return { records, userInfo, recordsByTaskID, missingRecordTaskIDs };
+function truncateRecordsByTaskID(
+  recordsByTaskID: Record<string, { total: number; items: string[] }>,
+  maxItemsPerTask = 20,
+) {
+  const out: Record<string, { total: number; items: string[] }> = {};
+  for (const [k, v] of Object.entries(recordsByTaskID || {})) {
+    const total = Math.trunc(Number((v as any)?.total ?? 0));
+    const items = Array.isArray((v as any)?.items) ? ((v as any).items as string[]) : [];
+    out[k] = { total: Number.isFinite(total) && total >= 0 ? total : items.length, items: items.slice(0, maxItemsPerTask) };
+  }
+  return out;
 }
 
 async function postWebhook(baseURL: string, payload: any) {
@@ -482,7 +691,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
 
   const allTaskRows = await fetchTaskRowsByTaskIDs(ctx, taskURL, tf.TaskID, taskIDs);
   const { byStatus, missingTaskIDs } = mergeTaskIDsByStatus(taskIDs, allTaskRows, tf.Status, tf.TaskID);
-  const ready = missingTaskIDs.length === 0 && allTaskRows.length > 0 && allTerminal(allTaskRows, tf.Status);
+  const ready = allTaskRows.length > 0 && allTerminal(allTaskRows, tf.Status);
   const updateAtField = typeof wf.UpdateAt === "string" && wf.UpdateAt.trim() ? wf.UpdateAt.trim() : "";
   const withUpdateAt = (fields: Record<string, any>) => {
     if (!Object.keys(fields).length) return fields;
@@ -490,12 +699,21 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   };
 
   const updateBase: Record<string, any> = {};
+  const nextTaskIDsByStatusStr = JSON.stringify(byStatus);
+  const taskIDsByStatusField = typeof wf.TaskIDsByStatus === "string" && wf.TaskIDsByStatus.trim() ? wf.TaskIDsByStatus.trim() : "";
+  if (taskIDsByStatusField) {
+    const cur = (planFields || {})[taskIDsByStatusField];
+    if (!equalTaskIDsByStatus(cur, byStatus)) updateBase[taskIDsByStatusField] = nextTaskIDsByStatusStr;
+  }
   if (wf.TaskIDs) {
     // Keep TaskIDs reflecting current status buckets for human readability.
-    updateBase[wf.TaskIDs] = JSON.stringify(byStatus);
+    updateBase[wf.TaskIDs] = nextTaskIDsByStatusStr;
   }
-  if (wf.TaskIDsByStatus) {
-    updateBase[wf.TaskIDsByStatus] = JSON.stringify(byStatus);
+
+  const nowMs = Date.now();
+  const startAtMs = Math.trunc(Number(firstText(planFields[wf.StartAt]) || 0)) || 0;
+  if (wf.StartAt && !startAtMs) {
+    updateBase[wf.StartAt] = nowMs;
   }
 
   if (!ready) {
@@ -511,35 +729,63 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   }
 
   const dramaInfo = parseDramaInfo(planFields[wf.DramaInfo]);
-  const { records, userInfo, recordsByTaskID, missingRecordTaskIDs } = await collectPayloadFromResultSource(opts, taskIDs);
+  const { records: sourceRecords } = await collectPayloadFromResultSource(opts, taskIDs);
 
-  let taskUserID = "";
-  let taskUserName = "";
+  const meta = pickTaskMetaFromRows(allTaskRows, tf.UserID, tf.UserName);
+  const groupUserKey = normalizeKey(parseGroupUserKey(opts.groupID)) || normalizeKey(meta.UserID);
+
+  const sceneByTaskID = new Map<number, string>();
   for (const r of allTaskRows) {
-    const f = r.fields || {};
-    const uid = firstText(f[tf.UserID]).trim();
-    const uname = firstText(f[tf.UserName]).trim();
-    if (uid || uname) {
-      taskUserID = uid;
-      taskUserName = uname;
-      break;
-    }
+    const f = r?.fields || {};
+    const tid = Math.trunc(Number(firstText(f[tf.TaskID]) || 0));
+    if (!Number.isFinite(tid) || tid <= 0) continue;
+    const scene = String(firstText(f[tf.Scene]) || "").trim();
+    if (scene) sceneByTaskID.set(tid, scene);
   }
-  const mergedUserInfo = {
-    UserID: String((userInfo as any)?.UserID || "").trim() || taskUserID,
-    UserName: String((userInfo as any)?.UserName || "").trim() || taskUserName,
-    UserAlias: String((userInfo as any)?.UserAlias || "").trim(),
-    UserAuthEntity: String((userInfo as any)?.UserAuthEntity || "").trim(),
+
+  const allowedTaskIDs = new Set<number>(uniqInts(taskIDs));
+  const strictSceneFilter = String(opts.bizType || "").trim() === "piracy_general_search";
+  let strictTotal = 0;
+  let strictKept = 0;
+  let strictMissingUserKey = 0;
+
+  const filteredRecords: Array<Record<string, unknown>> = [];
+  for (const rec of sourceRecords) {
+    const tid = readRecordTaskID(rec);
+    if (tid <= 0 || !allowedTaskIDs.has(tid)) continue;
+    const scene = String(sceneByTaskID.get(tid) || "").trim();
+    if (strictSceneFilter && scene === SCENE_GENERAL_SEARCH) {
+      strictTotal++;
+      if (!groupUserKey) continue;
+      const userKey = normalizeKey(readRecordUserKey(rec));
+      if (!userKey) {
+        strictMissingUserKey++;
+        continue;
+      }
+      if (!equalFold(userKey, groupUserKey)) continue;
+      strictKept++;
+    }
+    filteredRecords.push(rec);
+  }
+
+  const userAlias = pickFirstNonEmptyCaptureFieldByTaskIDs(filteredRecords, taskIDs, "UserAlias", "user_alias");
+  const userAuthEntity = pickFirstNonEmptyCaptureFieldByTaskIDs(filteredRecords, taskIDs, "UserAuthEntity", "user_auth_entity");
+  const finalUserInfo = {
+    UserID: String(meta.UserID || "").trim(),
+    UserName: String(meta.UserName || "").trim(),
+    UserAlias: String(userAlias || "").trim(),
+    UserAuthEntity: String(userAuthEntity || "").trim(),
   };
 
-  const payload = { ...dramaInfo, records, UserInfo: mergedUserInfo };
-  const nowMs = Date.now();
+  const payloadRecords = dedupRecordsByItemID(filteredRecords);
+  const { recordsByTaskID, missingRecordTaskIDs } = buildRecordsByTaskID(taskIDs, filteredRecords);
+  const payload = { ...dramaInfo, records: payloadRecords, UserInfo: finalUserInfo };
 
   if (missingRecordTaskIDs.length) {
     console.error(
-      `[webhook] warn: group=${opts.groupID} day=${day} missing records for task_ids=${missingRecordTaskIDs.join(",")}; source=${opts.dataSource || "sqlite"}`,
-    );
-  }
+       `[webhook] warn: group=${opts.groupID} day=${day} missing records for task_ids=${missingRecordTaskIDs.join(",")}; source=${opts.dataSource || "sqlite"} user_id=${finalUserInfo.UserID || ""}`,
+     );
+   }
 
   if (opts.dryRun) {
     return {
@@ -547,11 +793,36 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
       ready: true, pushed: false, status: currentStatus,
       retry_count: retryCount, task_ids: taskIDs, task_ids_by_status: byStatus,
       reason: "dry_run",
+      payload_record_count: payloadRecords.length,
+      records_by_task_id: truncateRecordsByTaskID(recordsByTaskID, 30),
+      debug: {
+        data_source: opts.dataSource || "sqlite",
+        user_info: finalUserInfo,
+        group_user_key: groupUserKey,
+        strict_total: strictTotal,
+        strict_kept: strictKept,
+        strict_missing_user_key: strictMissingUserKey,
+        fetched_row_count: sourceRecords.length,
+        final_row_count: filteredRecords.length,
+        payload_unique_item_count: payloadRecords.length,
+      },
     };
   }
 
   try {
-    await batchUpdate(ctx, webhookURL, [{ record_id: recordID, fields: withUpdateAt({ ...updateBase, [wf.StartAt]: nowMs }) }]);
+    // Persist artifacts before webhook delivery for easier debugging.
+    if (!opts.dryRun) {
+      await batchUpdate(ctx, webhookURL, [
+        {
+          record_id: recordID,
+          fields: withUpdateAt({
+            ...updateBase,
+            [wf.Records]: JSON.stringify(recordsByTaskID),
+            [wf.UserInfo]: JSON.stringify(finalUserInfo),
+          }),
+        },
+      ]);
+    }
     await postWebhook(crawlerBaseURL, payload);
     await batchUpdate(ctx, webhookURL, [
       {
@@ -561,13 +832,13 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.Status]: "success",
           [wf.RetryCount]: 0,
           [wf.LastError]: "",
-          [wf.EndAt]: nowMs,
-          // Keep Feishu Records identical to payload.records sent to crawler.
-          [wf.Records]: JSON.stringify(records),
-          [wf.UserInfo]: JSON.stringify(mergedUserInfo),
-        }),
-      },
-    ]);
+           [wf.EndAt]: nowMs,
+           // Records is a per-task view of what we actually sent.
+           [wf.Records]: JSON.stringify(recordsByTaskID),
+           [wf.UserInfo]: JSON.stringify(finalUserInfo),
+         }),
+       },
+     ]);
     return {
       group_id: opts.groupID, day, biz_type: opts.bizType,
       ready: true, pushed: true, status: "success",
@@ -584,13 +855,13 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.Status]: failStatus,
           [wf.RetryCount]: next,
           [wf.LastError]: String(err instanceof Error ? err.message : err),
-          [wf.EndAt]: Date.now(),
-          // Keep Feishu Records identical to payload.records sent to crawler.
-          [wf.Records]: JSON.stringify(records),
-          [wf.UserInfo]: JSON.stringify(mergedUserInfo),
-        }),
-      },
-    ]);
+           [wf.EndAt]: Date.now(),
+           // Records is a per-task view of what we actually sent.
+           [wf.Records]: JSON.stringify(recordsByTaskID),
+           [wf.UserInfo]: JSON.stringify(finalUserInfo),
+         }),
+       },
+     ]);
     return {
       group_id: opts.groupID, day, biz_type: opts.bizType,
       ready: true, pushed: false, status: failStatus,
