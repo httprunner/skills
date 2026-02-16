@@ -14,7 +14,6 @@ export type DetectTaskUnit = {
 export type ResolveDetectTaskUnitsOptions = {
   taskIds?: string;
   taskApp?: string;
-  taskScene?: string;
   taskStatus?: string;
   taskDate?: string;
   taskLimit?: string;
@@ -76,7 +75,7 @@ export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): Det
   }
 
   const taskApp = String(args.taskApp || "").trim();
-  const taskScene = String(args.taskScene || "综合页搜索").trim() || "综合页搜索";
+  const taskScene = "综合页搜索";
   const taskStatus = String(args.taskStatus || "success").trim() || "success";
   const taskDate = String(args.taskDate || "Today").trim() || "Today";
   const taskLimit = parseNonNegativeInt(String(args.taskLimit || "0"), "task limit");

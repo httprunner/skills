@@ -9,7 +9,6 @@ import { runDetectForUnits } from "./detect/runner";
 type CLIOptions = {
   taskIds?: string;
   taskApp?: string;
-  taskScene: string;
   taskStatus: string;
   taskDate: string;
   taskLimit: string;
@@ -34,7 +33,6 @@ function parseCLI(argv: string[]): CLIOptions {
     .description("Compatibility shell: run detect/create/upsert pipeline")
     .option("--task-ids <csv>", "Comma-separated TaskID list, e.g. 69111,69112,69113")
     .option("--task-app <app>", "Feishu task filter: App")
-    .option("--task-scene <scene>", "Feishu task filter: Scene", "综合页搜索")
     .option("--task-status <status>", "Feishu task filter: Status", "success")
     .option("--task-date <date>", "Feishu task filter: Date preset/value (e.g. Today/Yesterday/2026-02-15)", "Today")
     .option("--task-limit <n>", "Feishu task fetch limit (0 = no cap)", "0")
@@ -82,7 +80,6 @@ async function main() {
   const units = resolveDetectTaskUnits({
     taskIds: args.taskIds,
     taskApp: args.taskApp,
-    taskScene: args.taskScene,
     taskStatus: args.taskStatus,
     taskDate: args.taskDate,
     taskLimit: args.taskLimit,
