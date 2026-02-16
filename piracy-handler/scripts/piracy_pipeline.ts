@@ -300,16 +300,31 @@ async function main() {
   let skippedProcessed = 0;
   const unitsForPrecheck: DetectTaskUnit[] = [];
   const precheckMultiOutput = units.length > 1;
+  if (args.skipProcessed && units.length > 0) {
+    console.log("========================================");
+    console.log("PIRACY PIPELINE PROCESSED-SKIP CHECK");
+    console.log("========================================");
+  }
   for (const unit of units) {
     const unitOutputPath = resolveDetectOutputPath(output, unit, precheckMultiOutput);
     if (args.skipProcessed) {
       const skipCheck = canSkipByExistingDetect(unit, unitOutputPath, args);
       if (skipCheck.skip) {
         skippedProcessed += 1;
+        console.log(
+          `[SKIP-CHECK] ${skippedProcessed}/${units.length} skip BookID=${unit.parent.book_id || "-"} reason=${skipCheck.reason}`,
+        );
         continue;
       }
+      console.log(
+        `[SKIP-CHECK] ${skippedProcessed + unitsForPrecheck.length + 1}/${units.length} keep BookID=${unit.parent.book_id || "-"} reason=${skipCheck.reason}`,
+      );
     }
     unitsForPrecheck.push(unit);
+  }
+  if (args.skipProcessed && units.length > 0) {
+    console.log(`Skip-check done:      skipped=${skippedProcessed}, to_precheck=${unitsForPrecheck.length}`);
+    console.log("========================================");
   }
 
   const precheckResult = await precheckUnitsByItemsCollected(unitsForPrecheck, resultSource);
