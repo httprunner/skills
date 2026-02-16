@@ -8,7 +8,6 @@ import { buildResultSourceOptionsFromCLI } from "./data/result_source_cli";
 type CLIOptions = {
   taskIds?: string;
   taskApp?: string;
-  taskStatus: string;
   taskDate: string;
   taskLimit: string;
 
@@ -29,7 +28,6 @@ function parseCLI(argv: string[]): CLIOptions {
     .description("Piracy clustering and threshold detection (sqlite/supabase)")
     .option("--task-ids <csv>", "Comma-separated TaskID list (single or multiple)")
     .option("--task-app <app>", "Feishu task filter: App")
-    .option("--task-status <status>", "Feishu task filter: Status", "success")
     .option("--task-date <date>", "Feishu task filter: Date preset/value (Today/Yesterday/Any/YYYY-MM-DD)", "Today")
     .option("--task-limit <n>", "Feishu task fetch limit (0 = no cap)", "0")
 
@@ -62,7 +60,6 @@ async function main() {
   const units = resolveDetectTaskUnits({
     taskIds: args.taskIds,
     taskApp: args.taskApp,
-    taskStatus: args.taskStatus,
     taskDate: args.taskDate,
     taskLimit: args.taskLimit,
   });

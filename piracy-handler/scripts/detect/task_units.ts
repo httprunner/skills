@@ -14,7 +14,6 @@ export type DetectTaskUnit = {
 export type ResolveDetectTaskUnitsOptions = {
   taskIds?: string;
   taskApp?: string;
-  taskStatus?: string;
   taskDate?: string;
   taskLimit?: string;
 };
@@ -76,22 +75,21 @@ export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): Det
 
   const taskApp = String(args.taskApp || "").trim();
   const taskScene = "综合页搜索";
-  const taskStatus = String(args.taskStatus || "success").trim() || "success";
+  const taskStatuses = new Set(["success", "error"]);
   const taskDate = String(args.taskDate || "Today").trim() || "Today";
   const taskLimit = parseNonNegativeInt(String(args.taskLimit || "0"), "task limit");
   if (!taskApp) throw new Error("--task-app is required when --task-ids is absent");
 
-  const fetchArgs = ["--app", taskApp, "--scene", taskScene, "--status", taskStatus, "--date", taskDate];
+  const fetchArgs = ["--app", taskApp, "--scene", taskScene, "--status", "Any", "--date", taskDate];
   if (taskLimit > 0) fetchArgs.push("--limit", String(taskLimit));
 
   const fetchedTasks = runTaskFetch(fetchArgs);
   const expectDate = resolveDateFilter(taskDate);
-  const expectStatus = normalizeText(taskStatus);
   const expectScene = normalizeText(taskScene);
   const filteredTasks = fetchedTasks.filter((task) => {
     if (normalizeText(String(task.app || "")) !== normalizeText(taskApp)) return false;
     if (expectScene !== "any" && normalizeText(String(task.scene || "")) !== expectScene) return false;
-    if (expectStatus !== "any" && normalizeText(String(task.status || "")) !== expectStatus) return false;
+    if (!taskStatuses.has(normalizeText(String(task.status || "")))) return false;
     if (expectDate !== "any") {
       const actualDay = toDay(String(task.date || ""));
       if (!actualDay || actualDay !== expectDate) return false;
@@ -102,7 +100,7 @@ export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): Det
   const tasks = taskLimit > 0 ? filteredTasks.slice(0, taskLimit) : filteredTasks;
   if (!tasks.length) {
     throw new Error(
-      `no tasks matched from feishu after local filter: app=${taskApp}, scene=${taskScene}, status=${taskStatus}, date=${taskDate}, limit=${taskLimit}, fetched=${fetchedTasks.length}`,
+      `no tasks matched from feishu after local filter: app=${taskApp}, scene=${taskScene}, statuses=success|error, date=${taskDate}, limit=${taskLimit}, fetched=${fetchedTasks.length}`,
     );
   }
 

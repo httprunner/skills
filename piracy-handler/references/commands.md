@@ -28,7 +28,6 @@ npx tsx scripts/piracy_detect.ts --task-ids 123456,123457 --data-source supabase
 # 不传 --task-ids 时，自动按飞书条件筛选父任务并按 BookID 分组
 npx tsx scripts/piracy_detect.ts \
   --task-app com.tencent.mm \
-  --task-status success \
   --task-date Today \
   --data-source supabase
 ```
@@ -36,7 +35,7 @@ npx tsx scripts/piracy_detect.ts \
 主要参数：
 
 - `--task-ids <csv>`：任务 ID 列表
-- `--task-app/--task-status/--task-date/--task-limit`：飞书筛选条件（Scene 固定为`综合页搜索`）
+- `--task-app/--task-date/--task-limit`：飞书筛选条件（Scene 固定为`综合页搜索`，Status 固定为`success|error`）
 - `--data-source sqlite|supabase`：结果读取源（默认 `sqlite`）
 - `--sqlite-path`：sqlite 路径（sqlite 模式）
 - `--supabase-table --supabase-page-size --supabase-timeout-ms`：Supabase 参数（supabase 模式）
