@@ -297,7 +297,24 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
     UserAlias: String(pickField(rows[0] || {}, ["UserAlias", "user_alias"]) || "").trim(),
     UserAuthEntity: String(pickField(rows[0] || {}, ["UserAuthEntity", "user_auth_entity"]) || "").trim(),
   };
-  return { records: rows, userInfo };
+
+  const records = rows.map((row) => {
+    const itemID = String(pickField(row, ["ItemID", "item_id", "id", "ID"]) || "").trim();
+    const extra: Record<string, unknown> = {};
+    const knownKeys = ["ItemID", "item_id", "id", "ID", "UserID", "user_id", "UserName", "user_name", "UserAlias", "user_alias", "UserAuthEntity", "user_auth_entity"];
+    for (const [k, v] of Object.entries(row)) {
+      if (!knownKeys.includes(k)) {
+        extra[k] = v;
+      }
+    }
+    return {
+      ItemID: itemID,
+      Extra: JSON.stringify(extra),
+      ...row,
+    };
+  });
+
+  return { records, userInfo };
 }
 
 async function postWebhook(baseURL: string, payload: any) {

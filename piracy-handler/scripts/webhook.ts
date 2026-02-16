@@ -103,11 +103,24 @@ async function runReconcile(args: CLIOptions) {
   const source = buildResultSourceOptionsFromCLI(args);
   const maxRetries = parseOptionalPositiveInt(args.maxRetries, "--max-retries");
 
-  const rows = await listPendingOrFailedRows(day, bizType, limit);
-  const results = [] as any[];
+  console.error(`[reconcile] date=${day} bizType=${bizType} limit=${limit} dryRun=${dryRun} source=${source.dataSource}`);
 
-  for (const row of rows) {
+  const rows = await listPendingOrFailedRows(day, bizType, limit);
+  console.error(`[reconcile] found ${rows.length} pending/failed rows to process`);
+
+  const results = [] as any[];
+  let successCount = 0;
+  let failedCount = 0;
+  let errorCount = 0;
+  let pendingCount = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     if (!row.groupID) continue;
+
+    const idx = i + 1;
+    console.error(`[reconcile] [${idx}/${rows.length}] processing group: ${row.groupID}`);
+
     const result = await processOneGroup({
       groupID: row.groupID,
       day: row.day || day,
@@ -120,8 +133,19 @@ async function runReconcile(args: CLIOptions) {
       timeoutMs: source.timeoutMs,
       maxRetries,
     });
+
+    if (result.status === "success") successCount++;
+    else if (result.status === "failed") failedCount++;
+    else if (result.status === "error") errorCount++;
+    else pendingCount++;
+
+    const statusIcon = result.status === "success" ? "✓" : result.status === "failed" ? "✗" : result.status === "error" ? "!" : "?";
+    console.error(`[reconcile] [${idx}/${rows.length}] ${statusIcon} ${row.groupID} => ${result.status} (ready=${result.ready}, pushed=${result.pushed})${result.reason ? ` reason=${result.reason}` : ""}`);
+
     results.push(result);
   }
+
+  console.error(`[reconcile] done: success=${successCount} failed=${failedCount} error=${errorCount} pending=${pendingCount}`);
 
   const summary = {
     mode: "reconcile",
@@ -129,10 +153,10 @@ async function runReconcile(args: CLIOptions) {
     biz_type: bizType,
     scanned: rows.length,
     processed: results.length,
-    success: results.filter((r) => r.status === "success").length,
-    failed: results.filter((r) => r.status === "failed").length,
-    error: results.filter((r) => r.status === "error").length,
-    pending: results.filter((r) => r.status === "pending").length,
+    success: successCount,
+    failed: failedCount,
+    error: errorCount,
+    pending: pendingCount,
     dry_run: dryRun,
     results,
   };
