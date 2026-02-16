@@ -17,6 +17,7 @@
 ## Detect Modules
 
 - `scripts/detect/task_units.ts`: detect 的任务分组与来源解析。
+- `scripts/detect/precheck.ts`: 分组前置校验（完成态 + ItemsCollected 一致性）。
 - `scripts/detect/core.ts`: detect 聚合、阈值和输出构建核心逻辑。
 - `scripts/detect/runner.ts`: detect 执行编排和输出写入。
 

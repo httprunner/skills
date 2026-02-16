@@ -8,7 +8,7 @@ import { buildResultSourceOptionsFromCLI } from "./data/result_source_cli";
 type CLIOptions = {
   taskIds?: string;
   taskApp?: string;
-  taskDate: string;
+  taskDate?: string;
   taskLimit: string;
 
   dataSource: string;
@@ -27,8 +27,8 @@ function parseCLI(argv: string[]): CLIOptions {
     .name("piracy_detect")
     .description("Piracy clustering and threshold detection (sqlite/supabase)")
     .option("--task-ids <csv>", "Comma-separated TaskID list (single or multiple)")
-    .option("--task-app <app>", "Feishu task filter: App")
-    .option("--task-date <date>", "Feishu task filter: Date preset/value (Today/Yesterday/Any/YYYY-MM-DD)", "Today")
+    .option("--task-app <app>", "Feishu task filter: App; supports comma-separated values; default com.tencent.mm when task filters are used")
+    .option("--task-date <date>", "Feishu task filter: Date preset/value; supports comma-separated values; default Today when task filters are used")
     .option("--task-limit <n>", "Feishu task fetch limit (0 = no cap)", "0")
 
     .option("--data-source <type>", "Data source: sqlite|supabase", "sqlite")
@@ -43,7 +43,14 @@ function parseCLI(argv: string[]): CLIOptions {
     .showSuggestionAfterError();
 
   program.parse(argv);
-  return program.opts<CLIOptions>();
+  const opts = program.opts<CLIOptions>();
+  const hasTaskIDs = String(opts.taskIds || "").trim() !== "";
+  const hasTaskApp = String(opts.taskApp || "").trim() !== "";
+  const hasTaskDate = String(opts.taskDate || "").trim() !== "";
+  if (hasTaskIDs && (hasTaskApp || hasTaskDate)) {
+    throw new Error("--task-ids is mutually exclusive with --task-app/--task-date");
+  }
+  return opts;
 }
 
 async function main() {

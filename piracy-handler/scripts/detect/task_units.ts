@@ -4,10 +4,36 @@ export type DetectTaskUnit = {
   parentTaskID: number;
   taskIDs: number[];
   day: string;
+  sumItemsCollected: number;
   parent: {
     app: string;
     book_id: string;
     params: string;
+  };
+};
+
+export type DetectSkippedUnit = {
+  app: string;
+  book_id: string;
+  day: string;
+  task_ids: number[];
+  reason:
+    | "missing_book_id"
+    | "status_not_terminal"
+    | "items_collected_missing_or_invalid"
+    | "items_count_mismatch";
+  details?: Record<string, unknown>;
+};
+
+export type ResolveDetectTaskUnitsDetailedResult = {
+  readyUnits: DetectTaskUnit[];
+  skippedUnits: DetectSkippedUnit[];
+  scanSummary: {
+    task_count_scanned: number;
+    group_count_total: number;
+    group_count_ready: number;
+    group_count_skipped: number;
+    group_count_skipped_by_reason: Record<string, number>;
   };
 };
 
@@ -39,9 +65,41 @@ function normalizeText(v: string): string {
   return String(v || "").trim().toLowerCase();
 }
 
+function parseCSVList(raw: string): string[] {
+  return Array.from(
+    new Set(
+      String(raw || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function parseCSVListWithDefault(raw: string, fallback: string): string[] {
+  const values = parseCSVList(raw);
+  return values.length > 0 ? values : [fallback];
+}
+
+function parseTaskApps(raw: string): string[] {
+  return parseCSVListWithDefault(raw, "com.tencent.mm");
+}
+
+function parseTaskDates(raw: string): string[] {
+  return parseCSVListWithDefault(raw, "Today");
+}
+
+function parseItemsCollected(raw: unknown): { ok: boolean; value: number } {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return { ok: false, value: 0 };
+  const n = Math.trunc(Number(trimmed));
+  if (!Number.isFinite(n) || n < 0) return { ok: false, value: 0 };
+  return { ok: true, value: n };
+}
+
 function resolveDateFilter(v: string): string {
   const trimmed = String(v || "").trim();
-  if (!trimmed) return "today";
+  if (!trimmed) return todayLocal();
   const lower = trimmed.toLowerCase();
   if (lower === "any") return "any";
   if (lower === "today") return todayLocal();
@@ -49,93 +107,227 @@ function resolveDateFilter(v: string): string {
   return toDay(trimmed) || trimmed;
 }
 
-export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): DetectTaskUnit[] {
-  const hasTaskIDs = String(args.taskIds || "").trim() !== "";
+function markReason(reasonCounter: Record<string, number>, reason: string) {
+  reasonCounter[reason] = (reasonCounter[reason] || 0) + 1;
+}
 
-  if (hasTaskIDs) {
-    const taskIDs = parseTaskIDs(String(args.taskIds || ""));
-    const parentTaskID = taskIDs[0];
-    const parentTasks = runTaskFetch(["--task-id", String(parentTaskID), "--status", "Any", "--date", "Any"]);
-    if (!parentTasks.length) throw new Error(`parent task not found: ${parentTaskID}`);
-    const parentTask = parentTasks[0];
-    const day = String(toDay(parentTask.date) || todayLocal());
-    return [
-      {
-        parentTaskID,
-        taskIDs,
-        day,
-        parent: {
-          app: String(parentTask.app || "").trim(),
-          book_id: String(parentTask.book_id || "").trim(),
-          params: String(parentTask.params || "").trim(),
-        },
-      },
-    ];
-  }
+type TaskGroupItem = {
+  task_id: number;
+  app: string;
+  scene: string;
+  status: string;
+  book_id: string;
+  params: string;
+  date: string;
+  day: string;
+  items_collected_raw: string;
+};
 
-  const taskApp = String(args.taskApp || "").trim();
-  const taskScene = "综合页搜索";
-  const taskStatuses = new Set(["success", "error"]);
-  const taskDate = String(args.taskDate || "Today").trim() || "Today";
-  const taskLimit = parseNonNegativeInt(String(args.taskLimit || "0"), "task limit");
-  if (!taskApp) throw new Error("--task-app is required when --task-ids is absent");
+function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDetailedResult {
+  const readyUnits: DetectTaskUnit[] = [];
+  const skippedUnits: DetectSkippedUnit[] = [];
+  const reasonCounter: Record<string, number> = {};
 
-  const fetchArgs = ["--app", taskApp, "--scene", taskScene, "--status", "Any", "--date", taskDate];
-  if (taskLimit > 0) fetchArgs.push("--limit", String(taskLimit));
-
-  const fetchedTasks = runTaskFetch(fetchArgs);
-  const expectDate = resolveDateFilter(taskDate);
-  const expectScene = normalizeText(taskScene);
-  const filteredTasks = fetchedTasks.filter((task) => {
-    if (normalizeText(String(task.app || "")) !== normalizeText(taskApp)) return false;
-    if (expectScene !== "any" && normalizeText(String(task.scene || "")) !== expectScene) return false;
-    if (!taskStatuses.has(normalizeText(String(task.status || "")))) return false;
-    if (expectDate !== "any") {
-      const actualDay = toDay(String(task.date || ""));
-      if (!actualDay || actualDay !== expectDate) return false;
-    }
-    return true;
-  });
-
-  const tasks = taskLimit > 0 ? filteredTasks.slice(0, taskLimit) : filteredTasks;
-  if (!tasks.length) {
-    throw new Error(
-      `no tasks matched from feishu after local filter: app=${taskApp}, scene=${taskScene}, statuses=success|error, date=${taskDate}, limit=${taskLimit}, fetched=${fetchedTasks.length}`,
-    );
-  }
-
-  const byBookID = new Map<string, typeof tasks>();
+  const byGroup = new Map<string, TaskGroupItem[]>();
   for (const task of tasks) {
+    const app = String(task.app || "").trim();
+    const day = String(task.day || "").trim();
     const bookID = String(task.book_id || "").trim();
-    if (!bookID) continue;
-    const arr = byBookID.get(bookID) || [];
+    if (!bookID) {
+      skippedUnits.push({
+        app,
+        book_id: "",
+        day,
+        task_ids: [task.task_id],
+        reason: "missing_book_id",
+      });
+      markReason(reasonCounter, "missing_book_id");
+      continue;
+    }
+    const key = `${app}@@${bookID}@@${day}`;
+    const arr = byGroup.get(key) || [];
     arr.push(task);
-    byBookID.set(bookID, arr);
-  }
-  if (!byBookID.size) {
-    throw new Error("none of fetched tasks has non-empty BookID; cannot group for piracy detection");
+    byGroup.set(key, arr);
   }
 
-  const units: DetectTaskUnit[] = [];
-  for (const [bookID, bucket] of byBookID.entries()) {
-    const ids = Array.from(new Set(bucket.map((x) => parsePositiveInt(String(x.task_id), "task id")))).sort((a, b) => a - b);
-    if (!ids.length) continue;
-    const parentTaskID = ids[0];
-    const parentTask = bucket.find((x) => Number(x.task_id) === parentTaskID) || bucket[0];
-    const day = String(toDay(parentTask.date) || todayLocal());
+  for (const bucket of byGroup.values()) {
+    if (!bucket.length) continue;
+    const app = String(bucket[0].app || "").trim();
+    const day = String(bucket[0].day || "").trim();
+    const bookID = String(bucket[0].book_id || "").trim();
+    const taskIDs = Array.from(new Set(bucket.map((x) => x.task_id))).sort((a, b) => a - b);
 
-    units.push({
+    const nonTerminal = bucket
+      .map((x) => normalizeText(x.status))
+      .filter((x) => x !== "success" && x !== "error");
+    if (nonTerminal.length > 0) {
+      skippedUnits.push({
+        app,
+        book_id: bookID,
+        day,
+        task_ids: taskIDs,
+        reason: "status_not_terminal",
+        details: {
+          non_terminal_statuses: Array.from(new Set(nonTerminal)).sort(),
+        },
+      });
+      markReason(reasonCounter, "status_not_terminal");
+      continue;
+    }
+
+    let sumItemsCollected = 0;
+    let hasInvalidItemsCollected = false;
+    const invalidTaskIDs: number[] = [];
+    for (const t of bucket) {
+      const parsedItems = parseItemsCollected(t.items_collected_raw);
+      if (!parsedItems.ok) {
+        hasInvalidItemsCollected = true;
+        invalidTaskIDs.push(t.task_id);
+        continue;
+      }
+      sumItemsCollected += parsedItems.value;
+    }
+
+    if (hasInvalidItemsCollected) {
+      skippedUnits.push({
+        app,
+        book_id: bookID,
+        day,
+        task_ids: taskIDs,
+        reason: "items_collected_missing_or_invalid",
+        details: { invalid_task_ids: Array.from(new Set(invalidTaskIDs)).sort((a, b) => a - b) },
+      });
+      markReason(reasonCounter, "items_collected_missing_or_invalid");
+      continue;
+    }
+
+    const parentTaskID = taskIDs[0];
+    const parentTask = bucket.find((x) => x.task_id === parentTaskID) || bucket[0];
+    readyUnits.push({
       parentTaskID,
-      taskIDs: ids,
+      taskIDs,
       day,
+      sumItemsCollected,
       parent: {
-        app: String(parentTask.app || taskApp || "").trim(),
-        book_id: String(bookID || "").trim(),
+        app: app || String(parentTask.app || "").trim(),
+        book_id: bookID,
         params: String(parentTask.params || "").trim(),
       },
     });
   }
 
-  units.sort((a, b) => a.parentTaskID - b.parentTaskID);
-  return units;
+  readyUnits.sort((a, b) => a.parentTaskID - b.parentTaskID);
+  skippedUnits.sort((a, b) => {
+    if (a.day !== b.day) return a.day.localeCompare(b.day);
+    if (a.app !== b.app) return a.app.localeCompare(b.app);
+    if (a.book_id !== b.book_id) return a.book_id.localeCompare(b.book_id);
+    return (a.task_ids[0] || 0) - (b.task_ids[0] || 0);
+  });
+
+  return {
+    readyUnits,
+    skippedUnits,
+    scanSummary: {
+      task_count_scanned: tasks.length,
+      group_count_total: byGroup.size,
+      group_count_ready: readyUnits.length,
+      group_count_skipped: skippedUnits.length,
+      group_count_skipped_by_reason: reasonCounter,
+    },
+  };
+}
+
+export function resolveDetectTaskUnitsDetailed(args: ResolveDetectTaskUnitsOptions): ResolveDetectTaskUnitsDetailedResult {
+  const hasTaskIDs = String(args.taskIds || "").trim() !== "";
+  const hasTaskApp = String(args.taskApp || "").trim() !== "";
+  const hasTaskDate = String(args.taskDate || "").trim() !== "";
+  const taskScene = "综合页搜索";
+  const seenTaskIDs = new Set<number>();
+  const scannedTasks: TaskGroupItem[] = [];
+
+  if (hasTaskIDs && (hasTaskApp || hasTaskDate)) {
+    throw new Error("--task-ids is mutually exclusive with --task-app/--task-date");
+  }
+
+  if (hasTaskIDs) {
+    const taskIDs = parseTaskIDs(String(args.taskIds || ""));
+    const fetched = runTaskFetch(["--task-id", taskIDs.join(","), "--status", "Any", "--date", "Any"]);
+    for (const task of fetched) {
+      const tid = Number(task.task_id);
+      if (!Number.isFinite(tid) || tid <= 0 || seenTaskIDs.has(tid)) continue;
+      const day = String(toDay(task.date) || "").trim();
+      if (!day) continue;
+      seenTaskIDs.add(tid);
+      scannedTasks.push({
+        task_id: tid,
+        app: String(task.app || "").trim(),
+        scene: String(task.scene || "").trim(),
+        status: String(task.status || "").trim(),
+        book_id: String(task.book_id || "").trim(),
+        params: String(task.params || "").trim(),
+        date: String(task.date || "").trim(),
+        day,
+        items_collected_raw: String((task as any).items_collected || "").trim(),
+      });
+    }
+    if (!scannedTasks.length) {
+      throw new Error(`no tasks resolved by --task-ids: ${taskIDs.join(",")}`);
+    }
+    return buildUnitsFromTasks(scannedTasks);
+  }
+
+  const taskApps = parseTaskApps(String(args.taskApp || ""));
+  const taskDates = parseTaskDates(String(args.taskDate || ""));
+  const taskLimit = parseNonNegativeInt(String(args.taskLimit || "0"), "task limit");
+
+  for (const app of taskApps) {
+    for (const dateToken of taskDates) {
+      const fetchArgs = ["--app", app, "--scene", taskScene, "--status", "Any", "--date", dateToken];
+      if (taskLimit > 0) fetchArgs.push("--limit", String(taskLimit));
+
+      const fetchedTasks = runTaskFetch(fetchArgs);
+      const expectDate = resolveDateFilter(dateToken);
+      const expectScene = normalizeText(taskScene);
+
+      for (const task of fetchedTasks) {
+        const tid = Number(task.task_id);
+        if (!Number.isFinite(tid) || tid <= 0 || seenTaskIDs.has(tid)) continue;
+        const taskApp = String(task.app || "").trim();
+        const taskSceneValue = String(task.scene || "").trim();
+        const actualDay = toDay(String(task.date || ""));
+
+        if (normalizeText(taskApp) !== normalizeText(app)) continue;
+        if (expectScene !== "any" && normalizeText(taskSceneValue) !== expectScene) continue;
+        if (expectDate !== "any") {
+          if (!actualDay || actualDay !== expectDate) continue;
+        } else if (!actualDay) {
+          continue;
+        }
+
+        seenTaskIDs.add(tid);
+        scannedTasks.push({
+          task_id: tid,
+          app: taskApp,
+          scene: taskSceneValue,
+          status: String(task.status || "").trim(),
+          book_id: String(task.book_id || "").trim(),
+          params: String(task.params || "").trim(),
+          date: String(task.date || "").trim(),
+          day: actualDay,
+          items_collected_raw: String((task as any).items_collected || "").trim(),
+        });
+      }
+    }
+  }
+
+  if (!scannedTasks.length) {
+    throw new Error(
+      `no tasks matched from feishu after local filter: app=${taskApps.join(",")}, scene=${taskScene}, date=${taskDates.join(",")}, limit=${taskLimit}`,
+    );
+  }
+  return buildUnitsFromTasks(scannedTasks);
+}
+
+export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): DetectTaskUnit[] {
+  return resolveDetectTaskUnitsDetailed(args).readyUnits;
 }

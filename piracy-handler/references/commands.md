@@ -28,23 +28,27 @@ npx tsx scripts/piracy_detect.ts --task-ids 123456,123457 --data-source supabase
 # 不传 --task-ids 时，自动按飞书条件筛选父任务并按 BookID 分组
 npx tsx scripts/piracy_detect.ts \
   --task-app com.tencent.mm \
-  --task-date Today \
+  --task-date Today,Yesterday \
   --data-source supabase
+
+# 不传 --task-app 时默认 com.tencent.mm
+npx tsx scripts/piracy_detect.ts --task-date Today --data-source supabase
 ```
 
 主要参数：
 
 - `--task-ids <csv>`：任务 ID 列表
-- `--task-app/--task-date/--task-limit`：飞书筛选条件（Scene 固定为`综合页搜索`，Status 固定为`success|error`）
+- `--task-app/--task-date/--task-limit`：飞书筛选条件（`--task-app` 支持 CSV，默认 `com.tencent.mm`；`--task-date` 支持 CSV，默认 `Today`；Scene 固定为`综合页搜索`）
 - `--data-source sqlite|supabase`：结果读取源（默认 `sqlite`）
 - `--sqlite-path`：sqlite 路径（sqlite 模式）
 - `--supabase-table --supabase-page-size --supabase-timeout-ms`：Supabase 参数（supabase 模式）
 - `--threshold`：盗版阈值（默认 `0.5`）
 - `--output`：输出文件路径；`-` 仅允许单 detect unit
 
-筛选优先级：
-- 指定 `--task-ids` 时，优先按 TaskID 检测；
-- 未指定 `--task-ids` 时，按飞书筛选条件检测（需提供 `--task-app`）。
+筛选规则：
+- `--task-ids` 与 `--task-app/--task-date` 互斥；
+- 指定 `--task-ids` 时，按 TaskID 检测；
+- 未指定 `--task-ids` 时，按飞书筛选条件检测（未传 `--task-app` 时默认 `com.tencent.mm`，未传 `--task-date` 时默认 `Today`）。
 
 检测语义说明：
 - 仅纳入 `status=success` 的综合页任务结果行参与聚合；
@@ -82,7 +86,33 @@ npx tsx scripts/upsert_webhook_plan.ts --source plan --group-id "微信视频号
 ```bash
 npx tsx scripts/piracy_pipeline.ts --task-ids 69111,69112,69113
 npx tsx scripts/piracy_pipeline.ts --task-ids 69111,69112,69113 --dry-run
+
+# 默认扫描：task-app=com.tencent.mm, task-date=Today
+npx tsx scripts/piracy_pipeline.ts --dry-run
+
+# 多 App + 多日期扫描
+npx tsx scripts/piracy_pipeline.ts \
+  --task-app com.tencent.mm,com.smile.gifmaker \
+  --task-date Today,Yesterday \
+  --dry-run
 ```
+
+主要参数：
+
+- `--task-ids <csv>`：指定任务 ID 列表（与 `--task-app/--task-date` 互斥）
+- `--task-app <csv>`：任务 App 过滤（支持单值/多值 CSV，默认 `com.tencent.mm`）
+- `--task-date <csv>`：任务日期过滤（支持单值/多值 CSV，默认 `Today`）
+- `--task-limit <n>`：每轮 fetch 上限（0 表示不限制）
+- `--threshold <num>`：盗版命中阈值（默认 `0.5`）
+
+前置校验语义：
+
+- 任务分组键为 `App + BookID + Date`
+- 若分组内存在 `status != success|error`，整组跳过
+- 若分组内任一任务 `ItemsCollected` 为空或非数字，整组跳过
+- 从 `capture_results` 按分组 `task_ids` 拉取结果后，使用 `distinct item_id` 计数
+- 仅当 `distinct_item_count == sum(ItemsCollected)` 时分组进入 detect
+- 仅 detect 命中组会创建个人页任务并 upsert webhook plan
 
 ## 5. webhook.ts
 

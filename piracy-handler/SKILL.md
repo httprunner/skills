@@ -24,6 +24,7 @@ npx tsx scripts/piracy_pipeline.ts --task-ids <TASK_ID_1,TASK_ID_2,...>
 ```
 
 说明：`piracy_pipeline.ts` 保留为兼容壳，内部复用 detect runner + create/upsert。
+默认会按 `--task-app com.tencent.mm --task-date Today` 扫描；`--task-app/--task-date` 均支持 CSV 多值（例如 `com.tencent.mm,com.smile.gifmaker` 与 `Today,Yesterday`）。`--task-ids` 与 `--task-app/--task-date` 互斥。
 
 ### C. webhook 触发与补偿
 
@@ -61,7 +62,7 @@ npx tsx scripts/webhook.ts --mode reconcile --date <YYYY-MM-DD> --data-source <s
 - `scripts/data/result_source_cli.ts`
 统一 `--data-source/--sqlite-path/--table/--page-size/--timeout-ms` 解析。
 - `scripts/detect/task_units.ts`
-统一任务分组逻辑：`--task-ids` 优先；缺省时按飞书筛选条件分组。
+统一任务分组逻辑：`--task-ids` 与 `--task-app/--task-date` 互斥；缺省时按飞书筛选条件分组。
 - `scripts/detect/core.ts`
 detect 聚合/阈值/summary 核心逻辑。
 - `scripts/detect/runner.ts`

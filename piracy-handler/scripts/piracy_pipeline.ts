@@ -2,14 +2,15 @@
 import { Command } from "commander";
 import { spawnSync } from "child_process";
 import path from "path";
-import { env, must, toNumber } from "./shared/lib";
-import { resolveDetectTaskUnits } from "./detect/task_units";
+import { env, toNumber } from "./shared/lib";
+import { precheckUnitsByItemsCollected } from "./detect/precheck";
+import { resolveDetectTaskUnitsDetailed } from "./detect/task_units";
 import { runDetectForUnits } from "./detect/runner";
 
 type CLIOptions = {
   taskIds?: string;
   taskApp?: string;
-  taskDate: string;
+  taskDate?: string;
   taskLimit: string;
   threshold: string;
   output?: string;
@@ -20,9 +21,6 @@ type CLIOptions = {
   skipCreateSubtasks: boolean;
   skipUpsertWebhookPlans: boolean;
   bizType: string;
-  app?: string;
-  bookId?: string;
-  date?: string;
 };
 
 function parseCLI(argv: string[]): CLIOptions {
@@ -31,8 +29,8 @@ function parseCLI(argv: string[]): CLIOptions {
     .name("piracy_pipeline")
     .description("Compatibility shell: run detect/create/upsert pipeline")
     .option("--task-ids <csv>", "Comma-separated TaskID list, e.g. 69111,69112,69113")
-    .option("--task-app <app>", "Feishu task filter: App")
-    .option("--task-date <date>", "Feishu task filter: Date preset/value (e.g. Today/Yesterday/2026-02-15)", "Today")
+    .option("--task-app <app>", "Feishu task filter: App; supports comma-separated values; default com.tencent.mm when task filters are used")
+    .option("--task-date <date>", "Feishu task filter: Date preset/value; supports comma-separated values; default Today when task filters are used")
     .option("--task-limit <n>", "Feishu task fetch limit (0 = no cap)", "0")
     .option("--threshold <num>", "Threshold ratio", "0.5")
     .option("--output <path>", "Detect output path")
@@ -46,7 +44,14 @@ function parseCLI(argv: string[]): CLIOptions {
     .showHelpAfterError()
     .showSuggestionAfterError();
   program.parse(argv);
-  return program.opts<CLIOptions>();
+  const opts = program.opts<CLIOptions>();
+  const hasTaskIDs = String(opts.taskIds || "").trim() !== "";
+  const hasTaskApp = String(opts.taskApp || "").trim() !== "";
+  const hasTaskDate = String(opts.taskDate || "").trim() !== "";
+  if (hasTaskIDs && (hasTaskApp || hasTaskDate)) {
+    throw new Error("--task-ids is mutually exclusive with --task-app/--task-date");
+  }
+  return opts;
 }
 
 function runLocalScript(scriptName: string, args: string[]) {
@@ -69,27 +74,34 @@ async function main() {
   const output = String(args.output || "").trim();
   if (output === "-") throw new Error("--output - is not supported in pipeline mode");
 
-  must("SUPABASE_URL");
-  must("SUPABASE_SERVICE_ROLE_KEY");
-  must("FEISHU_APP_ID");
-  must("FEISHU_APP_SECRET");
-  must("DRAMA_BITABLE_URL");
-
-  const units = resolveDetectTaskUnits({
+  const unitResult = resolveDetectTaskUnitsDetailed({
     taskIds: args.taskIds,
     taskApp: args.taskApp,
     taskDate: args.taskDate,
     taskLimit: args.taskLimit,
   });
+  const units = unitResult.readyUnits;
+  const skippedBeforePrecheck = unitResult.skippedUnits;
 
   const totalTasks = units.reduce((acc, u) => acc + u.taskIDs.length, 0);
   console.log("========================================");
   console.log("PIRACY PIPELINE TASK UNITS");
   console.log("========================================");
-  console.log(`BookID Groups:        ${units.length}`);
+  console.log(`BookID Groups Total:  ${unitResult.scanSummary.group_count_total}`);
+  console.log(`BookID Groups Ready:  ${units.length}`);
+  console.log(`BookID Groups Skipped:${skippedBeforePrecheck.length}`);
   console.log(`TaskIDs Total:        ${totalTasks}`);
+  console.log(`Tasks Scanned:        ${unitResult.scanSummary.task_count_scanned}`);
+  const scanSkipByReason = Object.entries(unitResult.scanSummary.group_count_skipped_by_reason)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(", ");
+  if (scanSkipByReason) {
+    console.log(`Skipped Reasons:      ${scanSkipByReason}`);
+  }
   for (const [idx, u] of units.entries()) {
-    console.log(`[${idx + 1}/${units.length}] BookID=${u.parent.book_id || "-"} TaskCount=${u.taskIDs.length}`);
+    console.log(
+      `[${idx + 1}/${units.length}] App=${u.parent.app || "-"} BookID=${u.parent.book_id || "-"} Date=${u.day} TaskCount=${u.taskIDs.length}`,
+    );
   }
   console.log("========================================");
 
@@ -103,11 +115,47 @@ async function main() {
     pageSize: Number(args.pageSize),
     timeoutMs: Number(args.timeoutMs),
   };
+  const precheckResult = await precheckUnitsByItemsCollected(units, resultSource);
+  const unitsForDetect = precheckResult.readyUnits;
+  const skippedAfterPrecheck = precheckResult.skippedUnits;
+  const precheckReasonSummary = Object.entries(precheckResult.summary.skipped_by_reason)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(", ");
+  console.log("========================================");
+  console.log("PIRACY PIPELINE PRECHECK");
+  console.log("========================================");
+  console.log(`Checked Groups:       ${precheckResult.summary.checked_groups}`);
+  console.log(`Passed Groups:        ${precheckResult.summary.passed_groups}`);
+  console.log(`Skipped Groups:       ${precheckResult.summary.skipped_groups}`);
+  console.log(`Rows Read:            ${precheckResult.summary.rows_read}`);
+  if (precheckReasonSummary) {
+    console.log(`Skipped Reasons:      ${precheckReasonSummary}`);
+  }
+  console.log("========================================");
+
+  if (!unitsForDetect.length) {
+    console.log("No groups passed precheck; skip detect/create/upsert.");
+    console.log("========================================");
+    console.log("PIRACY PIPELINE BATCH SUMMARY");
+    console.log("========================================");
+    console.log(`BookID Groups Total:  ${unitResult.scanSummary.group_count_total}`);
+    console.log(`Skipped Before Check: ${skippedBeforePrecheck.length}`);
+    console.log(`Skipped In Precheck:  ${skippedAfterPrecheck.length}`);
+    console.log(`Processed Groups:     0`);
+    console.log(`Failed Groups:        0`);
+    console.log(`Rows from Supabase:   ${precheckResult.summary.rows_read}`);
+    console.log(`Groups Selected Sum:  0`);
+    console.log("========================================");
+    return;
+  }
+
   let processedCount = 0;
 
-  for (const [idx, unit] of units.entries()) {
+  for (const [idx, unit] of unitsForDetect.entries()) {
     try {
-      console.log(`>>> [${idx + 1}/${units.length}] Start BookID=${unit.parent.book_id || "-"} TaskIDs=${unit.taskIDs.join(",")}`);
+      console.log(
+        `>>> [${idx + 1}/${unitsForDetect.length}] Start App=${unit.parent.app || "-"} BookID=${unit.parent.book_id || "-"} Date=${unit.day} TaskIDs=${unit.taskIDs.join(",")}`,
+      );
       const results = await runDetectForUnits({
         units: [unit],
         threshold,
@@ -145,21 +193,26 @@ async function main() {
           runLocalScript("upsert_webhook_plan.ts", upsertArgs);
         }
       }
-      console.log(`<<< [${idx + 1}/${units.length}] Done BookID=${r.unit.parent.book_id || "-"} Selected=${selected} Rows=${r.rowCount}`);
+      console.log(
+        `<<< [${idx + 1}/${unitsForDetect.length}] Done BookID=${r.unit.parent.book_id || "-"} Selected=${selected} Rows=${r.rowCount}`,
+      );
     } catch (err) {
       failedGroups += 1;
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`xxx [${idx + 1}/${units.length}] Failed BookID=${unit.parent.book_id || "-"}: ${msg}`);
+      console.error(`xxx [${idx + 1}/${unitsForDetect.length}] Failed BookID=${unit.parent.book_id || "-"}: ${msg}`);
     }
   }
 
   console.log("========================================");
   console.log("PIRACY PIPELINE BATCH SUMMARY");
   console.log("========================================");
-  console.log(`BookID Groups:        ${units.length}`);
+  console.log(`BookID Groups Total:  ${unitResult.scanSummary.group_count_total}`);
+  console.log(`Skipped Before Check: ${skippedBeforePrecheck.length}`);
+  console.log(`Skipped In Precheck:  ${skippedAfterPrecheck.length}`);
+  console.log(`Ready For Detect:     ${unitsForDetect.length}`);
   console.log(`Processed Groups:     ${processedCount}`);
   console.log(`Failed Groups:        ${failedGroups}`);
-  console.log(`Rows from Supabase:   ${totalRows}`);
+  console.log(`Rows from Supabase:   ${totalRows + precheckResult.summary.rows_read}`);
   console.log(`Groups Selected Sum:  ${totalSelected}`);
   console.log("========================================");
 }
