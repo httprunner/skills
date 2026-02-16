@@ -9,6 +9,7 @@ import {
   type FeishuCtx,
   getTenantToken,
   must,
+  parseTaskIDs,
   readInput,
   searchRecords,
   toDay,
@@ -34,6 +35,16 @@ type UpsertItem = {
   task_ids: number[];
   drama_info?: string;
 };
+
+function isSamePositiveIntSet(a: number[], b: number[]): boolean {
+  const aa = Array.from(new Set(a.map((x) => Math.trunc(Number(x))).filter((x) => Number.isFinite(x) && x > 0))).sort((x, y) => x - y);
+  const bb = Array.from(new Set(b.map((x) => Math.trunc(Number(x))).filter((x) => Number.isFinite(x) && x > 0))).sort((x, y) => x - y);
+  if (aa.length !== bb.length) return false;
+  for (let i = 0; i < aa.length; i++) {
+    if (aa[i] !== bb[i]) return false;
+  }
+  return true;
+}
 
 function parsePositiveIDs(values: any): number[] {
   const input = Array.isArray(values) ? values : [];
@@ -359,7 +370,7 @@ async function main() {
   }
 
   const allRows = await searchRecords(ctx, webhookURL, null, 200, scanLimit);
-  const existingByKey = new Map<string, { recordID: string }>();
+  const existingByKey = new Map<string, { recordID: string; taskIDs: number[] }>();
   for (const r of allRows) {
     const recordID = String(r.record_id || "").trim();
     const bizType = normalizeTextValue(r?.fields?.[wf.BizType]);
@@ -367,7 +378,9 @@ async function main() {
     const day = normalizeDayValue(r?.fields?.[wf.Date]);
     if (!recordID || !bizType || !groupID || !day) continue;
     const key = `${bizType}@@${day}@@${groupID}`;
-    if (targetKeys.has(key) && !existingByKey.has(key)) existingByKey.set(key, { recordID });
+    if (targetKeys.has(key) && !existingByKey.has(key)) {
+      existingByKey.set(key, { recordID, taskIDs: parseTaskIDs(r?.fields?.[wf.TaskIDs]) });
+    }
   }
 
   const createRows: Array<{ fields: Record<string, any> }> = [];
@@ -389,6 +402,7 @@ async function main() {
 
     const exist = existingByKey.get(k);
     if (exist?.recordID) {
+      const taskIDsChanged = !isSamePositiveIntSet(exist.taskIDs, it.task_ids);
       updateRows.push({
         record_id: exist.recordID,
         fields: {
@@ -396,6 +410,13 @@ async function main() {
           ...(taskIDsByStatusField ? { [taskIDsByStatusField]: taskIDsByStatusPayload } : {}),
           ...(app && wf.App ? { [wf.App]: app } : {}),
           ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
+          ...(taskIDsChanged
+            ? {
+                [wf.Status]: "pending",
+                [wf.RetryCount]: 0,
+                [wf.LastError]: "",
+              }
+            : {}),
         },
       });
       continue;
