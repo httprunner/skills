@@ -382,6 +382,8 @@ async function main() {
     const taskIDsByStatusPayload = taskIDsPayload;
     const dramaInfo = it.drama_info || "";
     const app = String(it.app || "").trim();
+    const taskIDsByStatusField =
+      typeof wf.TaskIDsByStatus === "string" && wf.TaskIDsByStatus.trim() ? wf.TaskIDsByStatus.trim() : "";
 
     const exist = existingByKey.get(k);
     if (exist?.recordID) {
@@ -389,7 +391,7 @@ async function main() {
         record_id: exist.recordID,
         fields: {
           [wf.TaskIDs]: taskIDsPayload,
-          [wf.TaskIDsByStatus]: taskIDsByStatusPayload,
+          ...(taskIDsByStatusField ? { [taskIDsByStatusField]: taskIDsByStatusPayload } : {}),
           ...(app && wf.App ? { [wf.App]: app } : {}),
           ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
         },
@@ -404,7 +406,7 @@ async function main() {
         [wf.GroupID]: it.group_id,
         [wf.Status]: "pending",
         [wf.TaskIDs]: taskIDsPayload,
-        [wf.TaskIDsByStatus]: taskIDsByStatusPayload,
+        ...(taskIDsByStatusField ? { [taskIDsByStatusField]: taskIDsByStatusPayload } : {}),
         ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
         [wf.Date]: dayMs,
         [wf.RetryCount]: 0,

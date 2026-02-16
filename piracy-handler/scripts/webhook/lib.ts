@@ -228,7 +228,7 @@ export function webhookFields() {
     GroupID: env("WEBHOOK_FIELD_GROUPID", "GroupID"),
     Status: env("WEBHOOK_FIELD_STATUS", "Status"),
     TaskIDs: env("WEBHOOK_FIELD_TASKIDS", "TaskIDs"),
-    TaskIDsByStatus: env("WEBHOOK_FIELD_TASK_IDS_BY_STATUS", "TaskIDsByStatus"),
+    TaskIDsByStatus: env("WEBHOOK_FIELD_TASK_IDS_BY_STATUS", ""),
     DramaInfo: env("WEBHOOK_FIELD_DRAMAINFO", "DramaInfo"),
     Date: env("WEBHOOK_FIELD_DATE", "Date"),
     RetryCount: env("WEBHOOK_FIELD_RETRYCOUNT", "RetryCount"),
@@ -406,9 +406,10 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   const byStatus = classifyStatuses(allTaskRows, tf.Status, tf.TaskID);
   const ready = allTaskRows.length > 0 && allTerminal(allTaskRows, tf.Status);
 
-  const updateBase: Record<string, any> = {
-    [wf.TaskIDsByStatus]: JSON.stringify(byStatus),
-  };
+  const updateBase: Record<string, any> = {};
+  if (wf.TaskIDsByStatus) {
+    updateBase[wf.TaskIDsByStatus] = JSON.stringify(byStatus);
+  }
 
   if (!ready) {
     if (!opts.dryRun) {
