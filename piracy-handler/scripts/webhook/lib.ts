@@ -42,26 +42,41 @@ export type DispatchResult = {
 };
 
 export function parseTaskIDs(v: any): number[] {
-  if (Array.isArray(v)) {
-    return Array.from(new Set(v.map((x) => Math.trunc(Number(x))).filter((n) => Number.isFinite(n) && n > 0)));
+  if (v == null) return [];
+
+  const collectFromStatusObject = (obj: Record<string, any>) => {
+    const out: number[] = [];
+    for (const val of Object.values(obj)) {
+      if (Array.isArray(val)) {
+        for (const it of val) {
+          const n = Math.trunc(Number(it));
+          if (Number.isFinite(n) && n > 0) out.push(n);
+        }
+        continue;
+      }
+      const n = Math.trunc(Number(val));
+      if (Number.isFinite(n) && n > 0) out.push(n);
+    }
+    return Array.from(new Set(out)).sort((a, b) => a - b);
+  };
+
+  if (typeof v === "object" && !Array.isArray(v) && v) {
+    const maybeRichTextCell = "text" in v || "value" in v || "type" in v;
+    if (!maybeRichTextCell) return collectFromStatusObject(v as Record<string, any>);
   }
-  const s = String(v ?? "").trim();
+
+  const s = firstText(v).trim();
   if (!s) return [];
+
+  let obj: any;
   try {
-    const j = JSON.parse(s);
-    if (Array.isArray(j)) return parseTaskIDs(j);
-    if (typeof j === "string") return parseTaskIDs(j);
+    obj = JSON.parse(s);
   } catch {
-    // ignore
+    return [];
   }
-  return Array.from(
-    new Set(
-      s
-        .split(/[\s,，]+/)
-        .map((x) => Math.trunc(Number(x)))
-        .filter((n) => Number.isFinite(n) && n > 0),
-    ),
-  );
+
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+  return collectFromStatusObject(obj as Record<string, any>);
 }
 
 // ---------- Feishu Bitable API ----------

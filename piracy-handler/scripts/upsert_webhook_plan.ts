@@ -9,7 +9,6 @@ import {
   type FeishuCtx,
   getTenantToken,
   must,
-  parseTaskIDs,
   readInput,
   searchRecords,
   toDay,
@@ -44,6 +43,30 @@ function parsePositiveIDs(values: any): number[] {
   return Array.from(new Set(ids)).sort((a, b) => a - b);
 }
 
+function parseTaskIDsInput(v: any): number[] {
+  if (v == null) return [];
+  if (Array.isArray(v)) return parsePositiveIDs(v);
+  if (typeof v === "number") return parsePositiveIDs([v]);
+  if (typeof v === "object") {
+    const candidates = [v.task_ids, v.taskIDs, v.taskIds].filter((x) => x != null);
+    if (candidates.length) return parseTaskIDsInput(candidates[0]);
+    return [];
+  }
+  const s = String(v).trim();
+  if (!s) return [];
+  try {
+    const j = JSON.parse(s);
+    if (Array.isArray(j)) return parsePositiveIDs(j);
+  } catch {
+    // ignore JSON parse error
+  }
+  const ids = s
+    .split(/[\s,，,；;、|]+/)
+    .map((x) => Math.trunc(Number(x)))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
 function encodeTaskIDsByStatus(taskIDs: number[]): string {
   const status = String(env("WEBHOOK_TASKIDS_DEFAULT_STATUS", "pending")).trim().toLowerCase() || "pending";
   return JSON.stringify({ [status]: taskIDs });
@@ -74,7 +97,7 @@ function normalizeItem(raw: any, defaultBizType: string): UpsertItem | null {
   const date = toDay(rawDate) || rawDate;
   const bizType = String(raw?.biz_type ?? raw?.bizType ?? defaultBizType).trim() || defaultBizType;
   const app = String(raw?.app ?? raw?.App ?? "").trim();
-  const taskIDs = parseTaskIDs(raw?.task_ids ?? raw?.taskIDs ?? raw?.task_ids_json ?? raw?.taskIDsJSON ?? raw?.taskIds ?? "");
+  const taskIDs = parseTaskIDsInput(raw?.task_ids ?? raw?.taskIDs ?? raw?.task_ids_json ?? raw?.taskIDsJSON ?? raw?.taskIds ?? "");
   const dramaInfo = typeof raw?.drama_info === "string" ? raw.drama_info : typeof raw?.dramaInfo === "string" ? raw.dramaInfo : "";
   if (!groupID || !date || !taskIDs.length) return null;
   return { group_id: groupID, date, biz_type: bizType, app: app || undefined, task_ids: taskIDs, drama_info: dramaInfo || undefined };
@@ -232,7 +255,7 @@ function buildPlanItems(args: CLIOptions, bizTypeDefault: string, inputText?: st
       group_id: String(args.groupId).trim(),
       date: String(args.date || "").trim(),
       biz_type: bizTypeDefault,
-      task_ids: parseTaskIDs(args.taskId),
+      task_ids: parseTaskIDsInput(args.taskId),
       drama_info: String(args.dramaInfo || "").trim() || undefined,
     },
   ];
@@ -310,6 +333,7 @@ async function main() {
     const bizType = it.biz_type || bizTypeDefault;
     const k = `${bizType}@@${day}@@${it.group_id}`;
     const taskIDsPayload = encodeTaskIDsByStatus(it.task_ids);
+    const taskIDsByStatusPayload = taskIDsPayload;
     const dramaInfo = it.drama_info || "";
     const app = String(it.app || "").trim();
 
@@ -319,6 +343,7 @@ async function main() {
         record_id: exist.recordID,
         fields: {
           [wf.TaskIDs]: taskIDsPayload,
+          [wf.TaskIDsByStatus]: taskIDsByStatusPayload,
           ...(app && wf.App ? { [wf.App]: app } : {}),
           ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
         },
@@ -333,6 +358,7 @@ async function main() {
         [wf.GroupID]: it.group_id,
         [wf.Status]: "pending",
         [wf.TaskIDs]: taskIDsPayload,
+        [wf.TaskIDsByStatus]: taskIDsByStatusPayload,
         ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
         [wf.Date]: dayMs,
         [wf.RetryCount]: 0,
