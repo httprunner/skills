@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import { env, toNumber } from "./shared/lib";
+import { env, runTaskFetch, toNumber } from "./shared/lib";
 import { precheckUnitsByItemsCollected } from "./detect/precheck";
 import { resolveDetectTaskUnitsDetailed, type DetectSkippedUnit, type DetectTaskUnit } from "./detect/task_units";
 import { resolveDetectOutputPath, runDetectForUnits } from "./detect/runner";
@@ -55,6 +55,46 @@ function parseCLI(argv: string[]): CLIOptions {
     throw new Error("--task-ids is mutually exclusive with --task-app/--task-date");
   }
   return opts;
+}
+
+function parseTaskIDsCSV(raw: string): number[] {
+  const out = String(raw || "")
+    .split(",")
+    .map((x) => Math.trunc(Number(x.trim())))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  return Array.from(new Set(out));
+}
+
+function normalizeTaskIDsArg(taskIDs: number[]): string {
+  return taskIDs
+    .slice()
+    .sort((a, b) => a - b)
+    .join(",");
+}
+
+function filterGeneralSearchTaskIDs(taskIDsRaw: string): { kept: number[]; skipped: Array<{ task_id: number; scene: string }> } {
+  const taskIDs = parseTaskIDsCSV(taskIDsRaw);
+  if (!taskIDs.length) return { kept: [], skipped: [] };
+
+  const rows = runTaskFetch(["--task-id", taskIDs.join(","), "--status", "Any", "--date", "Any"]);
+  const byID = new Map<number, string>();
+  for (const row of rows) {
+    const tid = Math.trunc(Number(row?.task_id));
+    if (!Number.isFinite(tid) || tid <= 0) continue;
+    if (!byID.has(tid)) byID.set(tid, String(row?.scene || "").trim());
+  }
+
+  const kept: number[] = [];
+  const skipped: Array<{ task_id: number; scene: string }> = [];
+  for (const tid of taskIDs) {
+    const scene = String(byID.get(tid) || "").trim();
+    if (scene === "综合页搜索") {
+      kept.push(tid);
+      continue;
+    }
+    skipped.push({ task_id: tid, scene: scene || "missing" });
+  }
+  return { kept: Array.from(new Set(kept)).sort((a, b) => a - b), skipped };
 }
 
 function runLocalScriptCapture(scriptName: string, args: string[]) {
@@ -241,6 +281,27 @@ function formatSkippedMark(unit: DetectSkippedUnit): string {
 
 async function main() {
   const args = parseCLI(process.argv);
+  const hasTaskIDs = String(args.taskIds || "").trim() !== "";
+  if (hasTaskIDs) {
+    const filtered = filterGeneralSearchTaskIDs(String(args.taskIds || ""));
+    if (filtered.skipped.length > 0) {
+      console.log("========================================");
+      console.log("PIRACY PIPELINE TASK-ID FILTER");
+      console.log("========================================");
+      console.log(`Input TaskIDs:        ${String(args.taskIds || "")}`);
+      console.log(`Kept(综合页搜索):       ${filtered.kept.length}`);
+      console.log(`Skipped(non-综合页):   ${filtered.skipped.length}`);
+      for (const it of filtered.skipped) {
+        console.log(`- skip TaskID=${it.task_id} scene=${it.scene}`);
+      }
+      console.log("========================================");
+    }
+    if (!filtered.kept.length) {
+      console.log("No 综合页搜索 TaskID remained after filtering; skip pipeline.");
+      return;
+    }
+    args.taskIds = normalizeTaskIDsArg(filtered.kept);
+  }
   process.stderr.write("[piracy-handler] piracy_pipeline is a compatibility shell and internally reuses piracy_detect flow\n");
   const output = String(args.output || "").trim();
   if (output === "-") throw new Error("--output - is not supported in pipeline mode");

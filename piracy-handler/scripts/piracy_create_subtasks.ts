@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskCreate, runTaskFetch } from "./shared/lib";
+import { chunk, defaultDetectPath, parsePositiveInt, readInput, runTaskCreate, runTaskFetch, toDay } from "./shared/lib";
 
 type CLIOptions = {
   input?: string;
@@ -139,6 +139,8 @@ async function main() {
         day,
       ]);
       for (const t of tasks) {
+        const taskDay = toDay(String((t as any)?.date || "").trim());
+        if (taskDay !== day) continue;
         const gid = String((t as any)?.group_id || "").trim();
         if (gid) existingGroupIDs.add(gid);
       }

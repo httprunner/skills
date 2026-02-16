@@ -214,6 +214,8 @@ function collectTaskIDsByGroup(app: string, day: string, groupIDs: string[]): Ma
       for (const row of rows) {
         const gid = String(row?.group_id || "").trim();
         if (!gid) continue;
+        const rowDay = toDay(String(row?.date || "").trim());
+        if (rowDay !== day) continue;
         const tid = Math.trunc(Number(row?.task_id));
         if (!Number.isFinite(tid) || tid <= 0) continue;
         const current = out.get(gid) || [];
