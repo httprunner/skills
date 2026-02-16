@@ -237,6 +237,7 @@ export function webhookFields() {
     UserInfo: env("WEBHOOK_FIELD_USERINFO", "UserInfo"),
     StartAt: env("WEBHOOK_FIELD_STARTAT", "StartAt"),
     EndAt: env("WEBHOOK_FIELD_ENDAT", "EndAt"),
+    UpdateAt: env("WEBHOOK_FIELD_UPDATEAT", ""),
   };
 }
 
@@ -405,6 +406,11 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
 
   const byStatus = classifyStatuses(allTaskRows, tf.Status, tf.TaskID);
   const ready = allTaskRows.length > 0 && allTerminal(allTaskRows, tf.Status);
+  const updateAtField = typeof wf.UpdateAt === "string" && wf.UpdateAt.trim() ? wf.UpdateAt.trim() : "";
+  const withUpdateAt = (fields: Record<string, any>) => {
+    if (!Object.keys(fields).length) return fields;
+    return updateAtField ? { ...fields, [updateAtField]: Date.now() } : fields;
+  };
 
   const updateBase: Record<string, any> = {};
   if (wf.TaskIDsByStatus) {
@@ -412,8 +418,8 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   }
 
   if (!ready) {
-    if (!opts.dryRun) {
-      await batchUpdate(ctx, webhookURL, [{ record_id: recordID, fields: updateBase }]);
+    if (!opts.dryRun && Object.keys(updateBase).length > 0) {
+      await batchUpdate(ctx, webhookURL, [{ record_id: recordID, fields: withUpdateAt(updateBase) }]);
     }
     return {
       group_id: opts.groupID, day, biz_type: opts.bizType,
@@ -438,12 +444,12 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   }
 
   try {
-    await batchUpdate(ctx, webhookURL, [{ record_id: recordID, fields: { ...updateBase, [wf.StartAt]: nowMs } }]);
+    await batchUpdate(ctx, webhookURL, [{ record_id: recordID, fields: withUpdateAt({ ...updateBase, [wf.StartAt]: nowMs }) }]);
     await postWebhook(crawlerBaseURL, payload);
     await batchUpdate(ctx, webhookURL, [
       {
         record_id: recordID,
-        fields: {
+        fields: withUpdateAt({
           ...updateBase,
           [wf.Status]: "success",
           [wf.RetryCount]: 0,
@@ -451,7 +457,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.EndAt]: nowMs,
           [wf.Records]: JSON.stringify(records),
           [wf.UserInfo]: JSON.stringify(userInfo),
-        },
+        }),
       },
     ]);
     return {
@@ -465,7 +471,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
     await batchUpdate(ctx, webhookURL, [
       {
         record_id: recordID,
-        fields: {
+        fields: withUpdateAt({
           ...updateBase,
           [wf.Status]: failStatus,
           [wf.RetryCount]: next,
@@ -473,7 +479,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.EndAt]: Date.now(),
           [wf.Records]: JSON.stringify(records),
           [wf.UserInfo]: JSON.stringify(userInfo),
-        },
+        }),
       },
     ]);
     return {

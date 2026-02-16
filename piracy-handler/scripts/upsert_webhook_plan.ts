@@ -46,6 +46,10 @@ function isSamePositiveIntSet(a: number[], b: number[]): boolean {
   return true;
 }
 
+function isSameText(a: string, b: string): boolean {
+  return String(a || "").trim() === String(b || "").trim();
+}
+
 function parsePositiveIDs(values: any): number[] {
   const input = Array.isArray(values) ? values : [];
   const ids = input
@@ -370,7 +374,10 @@ async function main() {
   }
 
   const allRows = await searchRecords(ctx, webhookURL, null, 200, scanLimit);
-  const existingByKey = new Map<string, { recordID: string; taskIDs: number[] }>();
+  const existingByKey = new Map<
+    string,
+    { recordID: string; taskIDs: number[]; app: string; dramaInfo: string; taskIDsByStatusRaw: string; status: string }
+  >();
   for (const r of allRows) {
     const recordID = String(r.record_id || "").trim();
     const bizType = normalizeTextValue(r?.fields?.[wf.BizType]);
@@ -379,7 +386,14 @@ async function main() {
     if (!recordID || !bizType || !groupID || !day) continue;
     const key = `${bizType}@@${day}@@${groupID}`;
     if (targetKeys.has(key) && !existingByKey.has(key)) {
-      existingByKey.set(key, { recordID, taskIDs: parseTaskIDs(r?.fields?.[wf.TaskIDs]) });
+      existingByKey.set(key, {
+        recordID,
+        taskIDs: parseTaskIDs(r?.fields?.[wf.TaskIDs]),
+        app: normalizeTextValue(r?.fields?.[wf.App]),
+        dramaInfo: normalizeTextValue(r?.fields?.[wf.DramaInfo]),
+        taskIDsByStatusRaw: normalizeTextValue(r?.fields?.[wf.TaskIDsByStatus]),
+        status: normalizeTextValue(r?.fields?.[wf.Status]),
+      });
     }
   }
 
@@ -399,26 +413,32 @@ async function main() {
     const app = String(it.app || "").trim();
     const taskIDsByStatusField =
       typeof wf.TaskIDsByStatus === "string" && wf.TaskIDsByStatus.trim() ? wf.TaskIDsByStatus.trim() : "";
+    const updateAtField = typeof wf.UpdateAt === "string" && wf.UpdateAt.trim() ? wf.UpdateAt.trim() : "";
 
     const exist = existingByKey.get(k);
     if (exist?.recordID) {
       const taskIDsChanged = !isSamePositiveIntSet(exist.taskIDs, it.task_ids);
-      updateRows.push({
-        record_id: exist.recordID,
-        fields: {
-          [wf.TaskIDs]: taskIDsPayload,
-          ...(taskIDsByStatusField ? { [taskIDsByStatusField]: taskIDsByStatusPayload } : {}),
-          ...(app && wf.App ? { [wf.App]: app } : {}),
-          ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
-          ...(taskIDsChanged
-            ? {
-                [wf.Status]: "pending",
-                [wf.RetryCount]: 0,
-                [wf.LastError]: "",
-              }
-            : {}),
-        },
-      });
+      const appChanged = Boolean(app && wf.App && !isSameText(app, exist.app));
+      const dramaChanged = Boolean(dramaInfo && wf.DramaInfo && !isSameText(dramaInfo, exist.dramaInfo));
+      const byStatusChanged = Boolean(taskIDsByStatusField && !isSameText(taskIDsByStatusPayload, exist.taskIDsByStatusRaw));
+
+      const fields: Record<string, any> = {};
+      if (taskIDsChanged) fields[wf.TaskIDs] = taskIDsPayload;
+      if (taskIDsByStatusField && byStatusChanged) fields[taskIDsByStatusField] = taskIDsByStatusPayload;
+      if (appChanged && wf.App) fields[wf.App] = app;
+      if (dramaChanged && wf.DramaInfo) fields[wf.DramaInfo] = dramaInfo;
+      if (taskIDsChanged) {
+        fields[wf.Status] = "pending";
+        fields[wf.RetryCount] = 0;
+        fields[wf.LastError] = "";
+      }
+      if (Object.keys(fields).length > 0) {
+        if (updateAtField) fields[updateAtField] = Date.now();
+        updateRows.push({
+          record_id: exist.recordID,
+          fields,
+        });
+      }
       continue;
     }
 

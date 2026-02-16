@@ -446,10 +446,10 @@ async function main() {
       processedCount += 1;
 
       console.log("----------------------------------------");
-      console.log(`PIRACY PIPELINE SUMMARY (ParentTaskID: ${r.unit.parentTaskID})`);
+      console.log("PIRACY PIPELINE SUMMARY");
       console.log("----------------------------------------");
       console.log(`BookID:              ${r.unit.parent.book_id || "-"}`);
-      console.log(`TaskIDs:             ${r.unit.taskIDs.join(",")}`);
+      console.log(`SourceTaskIDs:       ${r.unit.taskIDs.join(",")}`);
       console.log(`Rows from Supabase:  ${r.rowCount}`);
       console.log(`Groups Selected:     ${selected}`);
       console.log(`Output File:         ${r.outputPath}`);
