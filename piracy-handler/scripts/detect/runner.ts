@@ -36,7 +36,7 @@ function defaultDetectPathByTaskIDs(taskIDs: number[]): string {
   return path.join(os.homedir(), ".eval", "detect", `${joined}.json`);
 }
 
-function resolveOutputPath(baseOutputArg: string | undefined, unit: DetectTaskUnit, multi: boolean): string {
+export function resolveDetectOutputPath(baseOutputArg: string | undefined, unit: DetectTaskUnit, multi: boolean): string {
   const outArg = String(baseOutputArg || "").trim();
   if (!outArg) return expandHome(defaultDetectPathByTaskIDs(unit.taskIDs));
   if (outArg === "-") return "-";
@@ -82,7 +82,7 @@ export async function runDetectForUnits(input: DetectRunnerInput): Promise<Detec
       sourceType: input.resultSource.dataSource,
     });
 
-    const outputPath = resolveOutputPath(input.output, unit, multi);
+    const outputPath = resolveDetectOutputPath(input.output, unit, multi);
     if (outputPath !== "-") {
       ensureDir(path.dirname(outputPath));
       fs.writeFileSync(outputPath, JSON.stringify(detect, null, 2));

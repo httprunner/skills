@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { spawnSync } from "child_process";
+import fs from "fs";
 import path from "path";
 import { env, toNumber } from "./shared/lib";
 import { precheckUnitsByItemsCollected } from "./detect/precheck";
-import { resolveDetectTaskUnitsDetailed, type DetectSkippedUnit } from "./detect/task_units";
-import { runDetectForUnits } from "./detect/runner";
+import { resolveDetectTaskUnitsDetailed, type DetectSkippedUnit, type DetectTaskUnit } from "./detect/task_units";
+import { resolveDetectOutputPath, runDetectForUnits } from "./detect/runner";
 
 type CLIOptions = {
   taskIds?: string;
@@ -20,6 +21,7 @@ type CLIOptions = {
   dryRun: boolean;
   skipCreateSubtasks: boolean;
   skipUpsertWebhookPlans: boolean;
+  skipProcessed: boolean;
   bizType: string;
 };
 
@@ -41,6 +43,7 @@ function parseCLI(argv: string[]): CLIOptions {
     .option("--dry-run", "Compute and print, skip writes in create/upsert")
     .option("--skip-create-subtasks", "Skip creating child tasks")
     .option("--skip-upsert-webhook-plans", "Skip upserting webhook plan records")
+    .option("--no-skip-processed", "Always rerun detect/downstream even if existing detect output is already fully processed")
     .showHelpAfterError()
     .showSuggestionAfterError();
   program.parse(argv);
@@ -54,7 +57,7 @@ function parseCLI(argv: string[]): CLIOptions {
   return opts;
 }
 
-function runLocalScript(scriptName: string, args: string[]) {
+function runLocalScriptCapture(scriptName: string, args: string[]) {
   const run = spawnSync("npx", ["tsx", `scripts/${scriptName}`, ...args], {
     cwd: path.resolve(__dirname, ".."),
     env: process.env,
@@ -64,8 +67,153 @@ function runLocalScript(scriptName: string, args: string[]) {
   if (run.status !== 0) {
     throw new Error(`${scriptName} failed: ${run.stderr || run.stdout || "unknown error"}`);
   }
-  if (run.stdout) process.stdout.write(run.stdout);
-  if (run.stderr) process.stderr.write(run.stderr);
+  return {
+    stdout: String(run.stdout || ""),
+    stderr: String(run.stderr || ""),
+  };
+}
+
+function runLocalScript(scriptName: string, args: string[]) {
+  const out = runLocalScriptCapture(scriptName, args);
+  if (out.stdout) process.stdout.write(out.stdout);
+  if (out.stderr) process.stderr.write(out.stderr);
+}
+
+function parseJSONObjects(text: string): any[] {
+  const out: any[] = [];
+  const s = String(text || "");
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      if (depth > 0) depth -= 1;
+      if (depth === 0 && start >= 0) {
+        const raw = s.slice(start, i + 1);
+        try {
+          out.push(JSON.parse(raw));
+        } catch {
+          // ignore invalid chunk
+        }
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
+function runLocalScriptLastJSON(scriptName: string, args: string[]): Record<string, unknown> {
+  const out = runLocalScriptCapture(scriptName, args);
+  const parsed = parseJSONObjects(out.stdout);
+  const last = parsed[parsed.length - 1];
+  if (!last || typeof last !== "object" || Array.isArray(last)) {
+    throw new Error(`${scriptName} returned no JSON summary`);
+  }
+  return last as Record<string, unknown>;
+}
+
+function parseDetectSourceTaskIDs(detect: Record<string, unknown>): number[] {
+  const rows = Array.isArray(detect.source_tasks) ? detect.source_tasks : [];
+  const ids = rows
+    .map((x) => Math.trunc(Number((x as any)?.task_id)))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
+function isSamePositiveIntSet(a: number[], b: number[]): boolean {
+  const aa = Array.from(new Set(a.map((x) => Math.trunc(Number(x))).filter((x) => Number.isFinite(x) && x > 0))).sort((x, y) => x - y);
+  const bb = Array.from(new Set(b.map((x) => Math.trunc(Number(x))).filter((x) => Number.isFinite(x) && x > 0))).sort((x, y) => x - y);
+  if (aa.length !== bb.length) return false;
+  for (let i = 0; i < aa.length; i++) {
+    if (aa[i] !== bb[i]) return false;
+  }
+  return true;
+}
+
+function hasDetectOutputForUnit(unit: DetectTaskUnit, detectPath: string): boolean {
+  if (!detectPath || detectPath === "-" || !fs.existsSync(detectPath)) return false;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(fs.readFileSync(detectPath, "utf-8"));
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object") return false;
+  const day = String(parsed.capture_day || parsed.day || "").trim();
+  if (day !== unit.day) return false;
+  const taskIDs = parseDetectSourceTaskIDs(parsed as Record<string, unknown>);
+  return isSamePositiveIntSet(taskIDs, unit.taskIDs);
+}
+
+function parseNumber(v: unknown): number {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseArrayLength(v: unknown): number {
+  return Array.isArray(v) ? v.length : 0;
+}
+
+function countDetectSelectedGroups(detect: Record<string, unknown>): number {
+  const appBooks = Array.isArray(detect.groups_by_app_book) ? detect.groups_by_app_book : [];
+  let total = 0;
+  for (const it of appBooks) {
+    const groups = Array.isArray((it as any)?.groups) ? (it as any).groups : [];
+    total += groups.length;
+  }
+  return total;
+}
+
+function canSkipByExistingDetect(
+  unit: DetectTaskUnit,
+  detectPath: string,
+  args: CLIOptions,
+): { skip: boolean; reason: string } {
+  if (!hasDetectOutputForUnit(unit, detectPath)) return { skip: false, reason: "no_reusable_detect_output" };
+  let parsedDetect: Record<string, unknown> | null = null;
+  try {
+    parsedDetect = JSON.parse(fs.readFileSync(detectPath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    parsedDetect = null;
+  }
+  if (parsedDetect && countDetectSelectedGroups(parsedDetect) <= 0) {
+    return { skip: true, reason: "existing_detect_no_hits" };
+  }
+
+  let createReady = true;
+  let webhookReady = true;
+  if (!args.skipCreateSubtasks) {
+    const createSummary = runLocalScriptLastJSON("piracy_create_subtasks.ts", ["--input", detectPath, "--dry-run"]);
+    createReady = parseNumber(createSummary.tasks_to_create) === 0;
+  }
+  if (!args.skipUpsertWebhookPlans) {
+    try {
+      const upsertSummary = runLocalScriptLastJSON("upsert_webhook_plan.ts", [
+        "--source",
+        "detect",
+        "--input",
+        detectPath,
+        "--biz-type",
+        String(args.bizType || "piracy_general_search"),
+        "--dry-run",
+      ]);
+      webhookReady = parseNumber(upsertSummary.created) === 0 && parseArrayLength(upsertSummary.errors) === 0;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("no valid upsert items generated from detect input")) {
+        webhookReady = true;
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (createReady && webhookReady) return { skip: true, reason: "existing_detect_and_downstream_ready" };
+  return { skip: false, reason: "downstream_not_ready" };
 }
 
 function pickStringArrayField(details: Record<string, unknown> | undefined, key: string): string[] {
@@ -149,7 +297,22 @@ async function main() {
     pageSize: Number(args.pageSize),
     timeoutMs: Number(args.timeoutMs),
   };
-  const precheckResult = await precheckUnitsByItemsCollected(units, resultSource);
+  let skippedProcessed = 0;
+  const unitsForPrecheck: DetectTaskUnit[] = [];
+  const precheckMultiOutput = units.length > 1;
+  for (const unit of units) {
+    const unitOutputPath = resolveDetectOutputPath(output, unit, precheckMultiOutput);
+    if (args.skipProcessed) {
+      const skipCheck = canSkipByExistingDetect(unit, unitOutputPath, args);
+      if (skipCheck.skip) {
+        skippedProcessed += 1;
+        continue;
+      }
+    }
+    unitsForPrecheck.push(unit);
+  }
+
+  const precheckResult = await precheckUnitsByItemsCollected(unitsForPrecheck, resultSource);
   const unitsForDetect = precheckResult.readyUnits;
   const skippedAfterPrecheck = precheckResult.skippedUnits;
   const precheckReasonSummary = Object.entries(precheckResult.summary.skipped_by_reason)
@@ -161,6 +324,7 @@ async function main() {
   console.log(`Checked Groups:       ${precheckResult.summary.checked_groups}`);
   console.log(`Passed Groups:        ${precheckResult.summary.passed_groups}`);
   console.log(`Skipped Groups:       ${precheckResult.summary.skipped_groups}`);
+  console.log(`Skipped Processed:    ${skippedProcessed}`);
   console.log(`Rows Read:            ${precheckResult.summary.rows_read}`);
   if (precheckReasonSummary) {
     console.log(`Skipped Reasons:      ${precheckReasonSummary}`);
@@ -175,6 +339,7 @@ async function main() {
     console.log(`BookID Groups Total:  ${unitResult.scanSummary.group_count_total}`);
     console.log(`Skipped Before Check: ${skippedBeforePrecheck.length}`);
     console.log(`Skipped In Precheck:  ${skippedAfterPrecheck.length}`);
+    console.log(`Skipped Processed:    ${skippedProcessed}`);
     console.log(`Processed Groups:     0`);
     console.log(`Failed Groups:        0`);
     console.log(`Rows from Supabase:   ${precheckResult.summary.rows_read}`);
@@ -184,16 +349,18 @@ async function main() {
   }
 
   let processedCount = 0;
+  const multiOutput = unitsForDetect.length > 1;
 
   for (const [idx, unit] of unitsForDetect.entries()) {
     try {
       console.log(
         `>>> [${idx + 1}/${unitsForDetect.length}] Start App=${unit.parent.app || "-"} BookID=${unit.parent.book_id || "-"} Date=${unit.day} TaskIDs=${unit.taskIDs.join(",")}`,
       );
+      const unitOutputPath = resolveDetectOutputPath(output, unit, multiOutput);
       const results = await runDetectForUnits({
         units: [unit],
         threshold,
-        output,
+        output: unitOutputPath,
         resultSource,
       });
       const r = results[0];
@@ -244,6 +411,7 @@ async function main() {
   console.log(`Skipped Before Check: ${skippedBeforePrecheck.length}`);
   console.log(`Skipped In Precheck:  ${skippedAfterPrecheck.length}`);
   console.log(`Ready For Detect:     ${unitsForDetect.length}`);
+  console.log(`Skipped Processed:    ${skippedProcessed}`);
   console.log(`Processed Groups:     ${processedCount}`);
   console.log(`Failed Groups:        ${failedGroups}`);
   console.log(`Rows from Supabase:   ${totalRows + precheckResult.summary.rows_read}`);
