@@ -562,7 +562,8 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.RetryCount]: 0,
           [wf.LastError]: "",
           [wf.EndAt]: nowMs,
-          [wf.Records]: JSON.stringify(recordsByTaskID),
+          // Keep Feishu Records identical to payload.records sent to crawler.
+          [wf.Records]: JSON.stringify(records),
           [wf.UserInfo]: JSON.stringify(mergedUserInfo),
         }),
       },
@@ -584,7 +585,8 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.RetryCount]: next,
           [wf.LastError]: String(err instanceof Error ? err.message : err),
           [wf.EndAt]: Date.now(),
-          [wf.Records]: JSON.stringify(recordsByTaskID),
+          // Keep Feishu Records identical to payload.records sent to crawler.
+          [wf.Records]: JSON.stringify(records),
           [wf.UserInfo]: JSON.stringify(mergedUserInfo),
         }),
       },
