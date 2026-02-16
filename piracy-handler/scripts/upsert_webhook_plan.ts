@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { readInput as readTextInput, todayLocal } from "./shared/lib";
+import { chunk, readInput as readTextInput, runTaskFetch, todayLocal } from "./shared/lib";
 import {
   batchCreate,
   batchUpdate,
@@ -189,6 +189,46 @@ function parseDetectSourceTaskIDs(detect: any): number[] {
   return parsePositiveIDs(fromSourceTasks);
 }
 
+function collectTaskIDsByGroup(app: string, day: string, groupIDs: string[]): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  const appValue = String(app || "").trim();
+  if (!appValue || !day || !groupIDs.length) return out;
+
+  const targetScenes = ["综合页搜索", "个人页搜索"];
+  const uniqueGroupIDs = Array.from(new Set(groupIDs.map((x) => String(x || "").trim()).filter(Boolean)));
+  for (const scene of targetScenes) {
+    for (const batch of chunk(uniqueGroupIDs, 40)) {
+      const queryIDs = batch.length === 1 ? [batch[0], batch[0]] : batch;
+      const rows = runTaskFetch([
+        "--group-id",
+        queryIDs.join(","),
+        "--app",
+        appValue,
+        "--scene",
+        scene,
+        "--status",
+        "Any",
+        "--date",
+        day,
+      ]);
+      for (const row of rows) {
+        const gid = String(row?.group_id || "").trim();
+        if (!gid) continue;
+        const tid = Math.trunc(Number(row?.task_id));
+        if (!Number.isFinite(tid) || tid <= 0) continue;
+        const current = out.get(gid) || [];
+        current.push(tid);
+        out.set(gid, current);
+      }
+    }
+  }
+
+  for (const [gid, ids] of out.entries()) {
+    out.set(gid, Array.from(new Set(ids)).sort((a, b) => a - b));
+  }
+  return out;
+}
+
 function buildUpsertItemsFromDetect(detect: any, bizType: string): UpsertItem[] {
   const day = String(detect?.capture_day || detect?.day || "").trim();
   const dayMs = Math.trunc(Number(detect?.capture_day_ms ?? detect?.day_ms ?? 0));
@@ -202,12 +242,18 @@ function buildUpsertItemsFromDetect(detect: any, bizType: string): UpsertItem[] 
     const bookID = String(appBook?.book_id || "").trim();
     const drama = appBook?.drama || {};
     const groups = Array.isArray(appBook?.groups) ? appBook.groups : [];
+    const groupTaskIDMap = collectTaskIDsByGroup(
+      app,
+      day,
+      groups.map((x: any) => String(x?.group_id || "").trim()),
+    );
 
     for (const g of groups) {
       const groupID = String(g?.group_id || "").trim();
       if (!groupID) continue;
       const groupTaskIDs = parseGroupTaskIDs(g);
-      const tids = Array.from(new Set([...groupTaskIDs, ...topSourceTaskIDs])).sort((a, b) => a - b);
+      const fetchedTaskIDs = groupTaskIDMap.get(groupID) || [];
+      const tids = Array.from(new Set([...groupTaskIDs, ...topSourceTaskIDs, ...fetchedTaskIDs])).sort((a, b) => a - b);
       if (!tids.length) continue;
 
       const dramaInfoObj = {

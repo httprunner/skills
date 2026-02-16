@@ -125,13 +125,14 @@ async function main() {
   for (const [app, groups] of groupsByApp.entries()) {
     const ids = Array.from(new Set(groups.map((g) => String(g?.group_id || "").trim()).filter(Boolean)));
     for (const batch of chunk(ids, 40)) {
+      const queryIDs = batch.length === 1 ? [batch[0], batch[0]] : batch;
       const tasks = runTaskFetch([
         "--group-id",
-        batch.join(","),
+        queryIDs.join(","),
         "--app",
         app,
         "--scene",
-        "Any",
+        "个人页搜索",
         "--status",
         "Any",
         "--date",
