@@ -84,6 +84,8 @@ async function querySupabaseByTaskField(
     const qs = new URLSearchParams();
     qs.set("select", "*");
     qs.set(taskField, `in.(${taskFilter})`);
+    // Make pagination stable across requests.
+    qs.set("order", "id.asc");
     qs.set("limit", String(pageSize));
     qs.set("offset", String(offset));
 

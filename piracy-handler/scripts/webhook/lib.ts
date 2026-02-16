@@ -237,7 +237,7 @@ export function webhookFields() {
     UserInfo: env("WEBHOOK_FIELD_USERINFO", "UserInfo"),
     StartAt: env("WEBHOOK_FIELD_STARTAT", "StartAt"),
     EndAt: env("WEBHOOK_FIELD_ENDAT", "EndAt"),
-    UpdateAt: env("WEBHOOK_FIELD_UPDATEAT", ""),
+    UpdateAt: env("WEBHOOK_FIELD_UPDATEAT", "UpdateAt"),
   };
 }
 
@@ -266,6 +266,43 @@ function allTerminal(taskRows: any[], statusField: string) {
   return taskRows.every((r) => isTerminalStatus(firstText((r.fields || {})[statusField])));
 }
 
+async function fetchTaskRowsByTaskIDs(ctx: FeishuCtx, taskURL: string, taskIDField: string, taskIDs: number[]) {
+  const ids = uniqInts(taskIDs);
+  if (!ids.length) return [] as any[];
+
+  const out: any[] = [];
+  // Feishu Bitable filter does not support a compact `in` operator for all field types.
+  // Use OR of `is` conditions, chunked to keep request bodies reasonable.
+  const chunkSize = 100;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const part = ids.slice(i, i + chunkSize);
+    const or = orFilter(part.map((id) => condition(taskIDField, "is", String(id))));
+    const filter = andFilter([], [or]);
+    const rows = await searchRecords(ctx, taskURL, filter, 200, part.length + 50);
+    out.push(...rows);
+  }
+  return out;
+}
+
+function mergeTaskIDsByStatus(allIDs: number[], taskRows: any[], statusField: string, taskIDField: string) {
+  const found = new Set<number>();
+  const by = classifyStatuses(taskRows, statusField, taskIDField);
+  for (const ids of Object.values(by)) {
+    for (const id of ids) found.add(id);
+  }
+  const missing = allIDs.filter((id) => !found.has(id));
+  if (missing.length) {
+    // Keep missing task IDs under pending to avoid silently dropping them.
+    by.pending = uniqInts([...(by.pending || []), ...missing]);
+  }
+  // Ensure every task id appears somewhere.
+  const flattened = new Set<number>();
+  for (const ids of Object.values(by)) for (const id of ids) flattened.add(id);
+  const leftovers = allIDs.filter((id) => !flattened.has(id));
+  if (leftovers.length) by.unknown = uniqInts([...(by.unknown || []), ...leftovers]);
+  return { byStatus: by, missingTaskIDs: missing };
+}
+
 function uniqInts(vals: number[]) {
   return Array.from(new Set(vals.filter((n) => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
 }
@@ -282,7 +319,14 @@ function parseDramaInfo(raw: any) {
 }
 
 async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: number[]) {
-  if (!taskIDs.length) return { records: [], userInfo: {} };
+  if (!taskIDs.length) {
+    return {
+      records: [],
+      userInfo: {},
+      recordsByTaskID: {} as Record<string, { total: number; items: string[] }>,
+      missingRecordTaskIDs: [] as number[],
+    };
+  }
   const source = createResultSource({
     dataSource: opts.dataSource || "sqlite",
     dbPath: opts.dbPath,
@@ -291,17 +335,25 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
     timeoutMs: opts.timeoutMs,
   });
   const rows = await source.fetchByTaskIDs(taskIDs);
-  const userInfo = {
-    UserID: String(pickField(rows[0] || {}, ["UserID", "user_id"]) || "").trim(),
-    UserName: String(pickField(rows[0] || {}, ["UserName", "user_name"]) || "").trim(),
-    UserAlias: String(pickField(rows[0] || {}, ["UserAlias", "user_alias"]) || "").trim(),
-    UserAuthEntity: String(pickField(rows[0] || {}, ["UserAuthEntity", "user_auth_entity"]) || "").trim(),
-  };
+
+  let userID = "";
+  let userName = "";
+  let userAlias = "";
+  let userAuthEntity = "";
+  for (const row of rows) {
+    userID = String(pickField(row, ["user_id", "UserID"]) || "").trim();
+    userName = String(pickField(row, ["user_name", "UserName"]) || "").trim();
+    userAlias = String(pickField(row, ["user_alias", "UserAlias"]) || "").trim();
+    userAuthEntity = String(pickField(row, ["user_auth_entity", "UserAuthEntity"]) || "").trim();
+    if (userID || userName || userAlias || userAuthEntity) break;
+  }
+
+  const userInfo = { UserID: userID, UserName: userName, UserAlias: userAlias, UserAuthEntity: userAuthEntity };
 
   const records = rows.map((row) => {
-    const itemID = String(pickField(row, ["ItemID", "item_id", "id", "ID"]) || "").trim();
+    const itemID = String(pickField(row, ["item_id", "ItemID", "id", "ID"]) || "").trim();
     const extra: Record<string, unknown> = {};
-    const knownKeys = ["ItemID", "item_id", "id", "ID", "UserID", "user_id", "UserName", "user_name", "UserAlias", "user_alias", "UserAuthEntity", "user_auth_entity"];
+    const knownKeys = ["item_id", "ItemID", "id", "ID", "user_id", "UserID", "user_name", "UserName", "user_alias", "UserAlias", "user_auth_entity", "UserAuthEntity", "task_id", "TaskID", "datetime", "Datetime"];
     for (const [k, v] of Object.entries(row)) {
       if (!knownKeys.includes(k)) {
         extra[k] = v;
@@ -314,7 +366,26 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
     };
   });
 
-  return { records, userInfo };
+  const itemsByTaskID = new Map<number, Set<string>>();
+  for (const row of rows) {
+    const tid = Math.trunc(Number(pickField(row, ["task_id", "TaskID"]) || 0));
+    if (!Number.isFinite(tid) || tid <= 0) continue;
+    const itemID = String(pickField(row, ["item_id", "ItemID", "id", "ID"]) || "").trim();
+    if (!itemID) continue;
+    if (!itemsByTaskID.has(tid)) itemsByTaskID.set(tid, new Set());
+    itemsByTaskID.get(tid)!.add(itemID);
+  }
+
+  const recordsByTaskID: Record<string, { total: number; items: string[] }> = {};
+  const missingRecordTaskIDs: number[] = [];
+  for (const tid of uniqInts(taskIDs)) {
+    const set = itemsByTaskID.get(tid) || new Set<string>();
+    const items = Array.from(set);
+    recordsByTaskID[String(tid)] = { total: items.length, items };
+    if (!items.length) missingRecordTaskIDs.push(tid);
+  }
+
+  return { records, userInfo, recordsByTaskID, missingRecordTaskIDs };
 }
 
 async function postWebhook(baseURL: string, payload: any) {
@@ -409,20 +480,9 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
     };
   }
 
-  const groupTaskRows = await searchRecords(
-    ctx,
-    taskURL,
-    andFilter([
-      condition(tf.GroupID, "is", opts.groupID),
-      condition(tf.Date, "is", "ExactDate", String(dayMs)),
-    ]),
-    500,
-    500,
-  );
-  const allTaskRows = groupTaskRows.filter((r) => taskIDs.includes(Math.trunc(Number(firstText((r.fields || {})[tf.TaskID])))));
-
-  const byStatus = classifyStatuses(allTaskRows, tf.Status, tf.TaskID);
-  const ready = allTaskRows.length > 0 && allTerminal(allTaskRows, tf.Status);
+  const allTaskRows = await fetchTaskRowsByTaskIDs(ctx, taskURL, tf.TaskID, taskIDs);
+  const { byStatus, missingTaskIDs } = mergeTaskIDsByStatus(taskIDs, allTaskRows, tf.Status, tf.TaskID);
+  const ready = missingTaskIDs.length === 0 && allTaskRows.length > 0 && allTerminal(allTaskRows, tf.Status);
   const updateAtField = typeof wf.UpdateAt === "string" && wf.UpdateAt.trim() ? wf.UpdateAt.trim() : "";
   const withUpdateAt = (fields: Record<string, any>) => {
     if (!Object.keys(fields).length) return fields;
@@ -430,6 +490,10 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   };
 
   const updateBase: Record<string, any> = {};
+  if (wf.TaskIDs) {
+    // Keep TaskIDs reflecting current status buckets for human readability.
+    updateBase[wf.TaskIDs] = JSON.stringify(byStatus);
+  }
   if (wf.TaskIDsByStatus) {
     updateBase[wf.TaskIDsByStatus] = JSON.stringify(byStatus);
   }
@@ -442,14 +506,40 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
       group_id: opts.groupID, day, biz_type: opts.bizType,
       ready: false, pushed: false, status: currentStatus,
       retry_count: retryCount, task_ids: taskIDs, task_ids_by_status: byStatus,
-      reason: "tasks_not_ready",
+      reason: missingTaskIDs.length ? `tasks_missing:${missingTaskIDs.join(",")}` : "tasks_not_ready",
     };
   }
 
   const dramaInfo = parseDramaInfo(planFields[wf.DramaInfo]);
-  const { records, userInfo } = await collectPayloadFromResultSource(opts, taskIDs);
-  const payload = { ...dramaInfo, records, UserInfo: userInfo };
+  const { records, userInfo, recordsByTaskID, missingRecordTaskIDs } = await collectPayloadFromResultSource(opts, taskIDs);
+
+  let taskUserID = "";
+  let taskUserName = "";
+  for (const r of allTaskRows) {
+    const f = r.fields || {};
+    const uid = firstText(f[tf.UserID]).trim();
+    const uname = firstText(f[tf.UserName]).trim();
+    if (uid || uname) {
+      taskUserID = uid;
+      taskUserName = uname;
+      break;
+    }
+  }
+  const mergedUserInfo = {
+    UserID: String((userInfo as any)?.UserID || "").trim() || taskUserID,
+    UserName: String((userInfo as any)?.UserName || "").trim() || taskUserName,
+    UserAlias: String((userInfo as any)?.UserAlias || "").trim(),
+    UserAuthEntity: String((userInfo as any)?.UserAuthEntity || "").trim(),
+  };
+
+  const payload = { ...dramaInfo, records, UserInfo: mergedUserInfo };
   const nowMs = Date.now();
+
+  if (missingRecordTaskIDs.length) {
+    console.error(
+      `[webhook] warn: group=${opts.groupID} day=${day} missing records for task_ids=${missingRecordTaskIDs.join(",")}; source=${opts.dataSource || "sqlite"}`,
+    );
+  }
 
   if (opts.dryRun) {
     return {
@@ -472,8 +562,8 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.RetryCount]: 0,
           [wf.LastError]: "",
           [wf.EndAt]: nowMs,
-          [wf.Records]: JSON.stringify(records),
-          [wf.UserInfo]: JSON.stringify(userInfo),
+          [wf.Records]: JSON.stringify(recordsByTaskID),
+          [wf.UserInfo]: JSON.stringify(mergedUserInfo),
         }),
       },
     ]);
@@ -494,8 +584,8 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
           [wf.RetryCount]: next,
           [wf.LastError]: String(err instanceof Error ? err.message : err),
           [wf.EndAt]: Date.now(),
-          [wf.Records]: JSON.stringify(records),
-          [wf.UserInfo]: JSON.stringify(userInfo),
+          [wf.Records]: JSON.stringify(recordsByTaskID),
+          [wf.UserInfo]: JSON.stringify(mergedUserInfo),
         }),
       },
     ]);
