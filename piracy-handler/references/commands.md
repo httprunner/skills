@@ -129,6 +129,7 @@ npx tsx scripts/webhook.ts --mode single --group-id "微信视频号_123_xxx" --
 # 批量补偿（按日期扫描 pending/failed）
 npx tsx scripts/webhook.ts --mode reconcile --date 2026-02-15 --data-source sqlite
 npx tsx scripts/webhook.ts --mode reconcile --date 2026-02-15 --data-source supabase --table capture_results --limit 100
+npx tsx scripts/webhook.ts --mode reconcile --date Today,Yesterday --data-source supabase --table capture_results --limit 100
 
 # 自动模式（默认）：传 task/group 走 single，否则走 reconcile
 npx tsx scripts/webhook.ts --task-id 123456 --dry-run
@@ -139,7 +140,7 @@ npx tsx scripts/webhook.ts --date 2026-02-15 --dry-run
 
 - `--mode auto|single|reconcile`：运行模式（默认 `auto`）
 - `--task-id/--group-id`：single 模式入口参数
-- `--date`：single/reconcile 的日期（single 不传时默认今天）
+- `--date`：single/reconcile 的日期（支持单值/多值 CSV 与 `Today/Yesterday`，single 不传时默认今天）
 - `--biz-type`：业务类型（默认 `piracy_general_search`）
 - `--limit`：reconcile 最大处理条数（默认 `50`）
 - `--data-source sqlite|supabase`：payload 采集结果来源
