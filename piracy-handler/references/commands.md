@@ -151,6 +151,7 @@ npx tsx scripts/webhook.ts --date 2026-02-15 --dry-run
 ready 语义说明：
 - 组内任务全部为 `success|error` 才会触发 webhook；
 - `failed` 任务不会触发 ready，仅进入后续 reconcile 重试路径。
+- `reconcile` 会先按 `--date` 过滤 webhook 计划记录，再基于该记录继续处理（不再二次按 `GroupID+Date` 回查计划）。
 
 ## 6. whitelist_check.ts
 

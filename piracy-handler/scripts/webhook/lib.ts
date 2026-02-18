@@ -20,6 +20,8 @@ export type DispatchOptions = {
   groupID: string;
   day: string;
   bizType: string;
+  planRecordID?: string;
+  planFields?: Record<string, any>;
   dryRun?: boolean;
   dataSource?: ResultDataSource;
   dbPath?: string;
@@ -44,6 +46,14 @@ export type DispatchResult = {
   records_by_task_id?: Record<string, { total: number; items: string[] }>;
   payload_record_count?: number;
   debug?: Record<string, unknown>;
+};
+
+export type PendingOrFailedPlanRow = {
+  recordID: string;
+  groupID: string;
+  day: string;
+  bizType: string;
+  fields: Record<string, any>;
 };
 
 const TASK_ID_FIELDS = ["task_id", "TaskID"] as const;
@@ -894,19 +904,24 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   const sourceSchema = sourceFieldSchema();
 
   const day = opts.day || todayLocal();
-  const dayMs = dayStartMs(day);
 
-  const planRows = await searchRecords(
-    ctx,
-    webhookURL,
-    andFilter([
-      condition(wf.BizType, "is", opts.bizType),
-      condition(wf.GroupID, "is", opts.groupID),
-      condition(wf.Date, "is", "ExactDate", String(dayMs)),
-    ]),
-    20,
-    20,
-  );
+  const providedRecordID = String(opts.planRecordID || "").trim();
+  const providedFields = opts.planFields && typeof opts.planFields === "object" ? opts.planFields : null;
+
+  const planRows: any[] =
+    providedRecordID && providedFields
+      ? [{ record_id: providedRecordID, fields: providedFields }]
+      : await searchRecords(
+          ctx,
+          webhookURL,
+          andFilter([
+            condition(wf.BizType, "is", opts.bizType),
+            condition(wf.GroupID, "is", opts.groupID),
+            condition(wf.Date, "is", "ExactDate", String(dayStartMs(day))),
+          ]),
+          20,
+          20,
+        );
 
   if (!planRows.length) {
     return {
@@ -917,22 +932,14 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
     };
   }
 
-  let chosenPlan = planRows[0];
-  let chosenTaskIDs: number[] = [];
-  for (const row of planRows) {
-    const rowTaskIDs = uniqInts(parseTaskIDs((row.fields || {})[wf.TaskIDs]));
-    if (rowTaskIDs.length > 0) {
-      chosenPlan = row;
-      chosenTaskIDs = rowTaskIDs;
-      break;
-    }
-  }
+  const chosenPlan =
+    planRows.find((row) => uniqInts(parseTaskIDs((row.fields || {})[wf.TaskIDs])).length > 0) || planRows[0];
 
   const planFields = chosenPlan.fields || {};
   const recordID = String(chosenPlan.record_id || "").trim();
   const currentStatus = firstText(planFields[wf.Status]).toLowerCase() || "pending";
   const retryCount = Math.trunc(Number(firstText(planFields[wf.RetryCount]) || "0")) || 0;
-  const taskIDs = chosenTaskIDs.length > 0 ? chosenTaskIDs : uniqInts(parseTaskIDs(planFields[wf.TaskIDs]));
+  const taskIDs = uniqInts(parseTaskIDs(planFields[wf.TaskIDs]));
 
   if (!taskIDs.length) {
     return {
@@ -1141,7 +1148,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   }
 }
 
-export async function listPendingOrFailedRows(day: string, bizType: string, limit: number) {
+export async function listPendingOrFailedRows(day: string, bizType: string, limit: number): Promise<PendingOrFailedPlanRow[]> {
   const appID = must("FEISHU_APP_ID");
   const appSecret = must("FEISHU_APP_SECRET");
   const webhookURL = must("WEBHOOK_BITABLE_URL");
@@ -1166,6 +1173,7 @@ export async function listPendingOrFailedRows(day: string, bizType: string, limi
       groupID: firstText(f[wf.GroupID]),
       day: day || toDay(firstText(f[wf.Date])),
       bizType: firstText(f[wf.BizType]) || bizType,
+      fields: f,
     };
   });
 }

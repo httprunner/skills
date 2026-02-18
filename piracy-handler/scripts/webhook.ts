@@ -187,6 +187,8 @@ async function runReconcile(args: CLIOptions) {
         groupID: row.groupID,
         day: row.day || day,
         bizType: row.bizType || bizType,
+        planRecordID: row.recordID,
+        planFields: row.fields,
         dryRun,
         dataSource: source.dataSource,
         dbPath: source.dbPath,
