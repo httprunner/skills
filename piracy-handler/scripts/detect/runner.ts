@@ -47,9 +47,9 @@ export function resolveDetectOutputPath(baseOutputArg: string | undefined, unit:
   const parsed = path.parse(expanded);
   const bookSuffix = sanitizeForFilename(unit.parent.book_id) || "book";
   if (parsed.ext.toLowerCase() === ".json") {
-    return path.join(parsed.dir, `${parsed.name}_${unit.parentTaskID}_${bookSuffix}.json`);
+    return path.join(parsed.dir, `${parsed.name}_${unit.anchorTaskID}_${bookSuffix}.json`);
   }
-  return path.join(expanded, `${unit.parentTaskID}_${bookSuffix}.json`);
+  return path.join(expanded, `${unit.anchorTaskID}_${bookSuffix}.json`);
 }
 
 export async function runDetectForUnits(input: DetectRunnerInput): Promise<DetectRunnerOutput[]> {

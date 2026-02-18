@@ -1,7 +1,7 @@
 import { parsePositiveInt, runTaskFetch, toDay, todayLocal, yesterdayLocal } from "../shared/lib";
 
 export type DetectTaskUnit = {
-  parentTaskID: number;
+  anchorTaskID: number;
   taskIDs: number[];
   day: string;
   sumItemsCollected: number;
@@ -205,10 +205,10 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
       continue;
     }
 
-    const parentTaskID = taskIDs[0];
-    const parentTask = bucket.find((x) => x.task_id === parentTaskID) || bucket[0];
+    const anchorTaskID = taskIDs[0];
+    const parentTask = bucket.find((x) => x.task_id === anchorTaskID) || bucket[0];
     readyUnits.push({
-      parentTaskID,
+      anchorTaskID,
       taskIDs,
       day,
       sumItemsCollected,
@@ -221,7 +221,7 @@ function buildUnitsFromTasks(tasks: TaskGroupItem[]): ResolveDetectTaskUnitsDeta
     });
   }
 
-  readyUnits.sort((a, b) => a.parentTaskID - b.parentTaskID);
+  readyUnits.sort((a, b) => a.anchorTaskID - b.anchorTaskID);
   skippedUnits.sort((a, b) => {
     if (a.day !== b.day) return a.day.localeCompare(b.day);
     if (a.app !== b.app) return a.app.localeCompare(b.app);
