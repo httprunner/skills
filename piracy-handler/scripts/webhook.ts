@@ -19,6 +19,7 @@ type CLIOptions = {
   pageSize?: string;
   timeoutMs?: string;
   maxRetries?: string;
+  logLevel?: string;
 };
 
 type WebhookMode = "single" | "reconcile";
@@ -41,6 +42,7 @@ function parseCLI(argv: string[]): CLIOptions {
     .option("--page-size <n>", "Supabase page size", "1000")
     .option("--timeout-ms <n>", "Supabase timeout in milliseconds", "30000")
     .option("--max-retries <num>", "Max retries override")
+    .option("--log-level <level>", "Log level: trace|debug|info|warn|error", "info")
     .showHelpAfterError()
     .showSuggestionAfterError();
 
@@ -165,6 +167,8 @@ async function runReconcile(args: CLIOptions) {
 
 async function main() {
   const args = parseCLI(process.argv);
+  const logLevel = String(args.logLevel || "info").trim().toLowerCase();
+  process.env.LOG_LEVEL = logLevel;
   const mode = resolveMode(args);
   if (mode === "single") return runSingle(args);
   return runReconcile(args);

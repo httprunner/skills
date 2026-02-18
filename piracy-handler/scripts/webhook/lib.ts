@@ -11,6 +11,7 @@ import {
   toDay,
 } from "../shared/lib";
 import { createResultSource, type ResultDataSource } from "../data/result_source";
+import { createHmac } from "crypto";
 
 // Re-export for consumers that import from webhook_lib
 export { dayStartMs, env, expandHome, must, readInput, toDay };
@@ -49,6 +50,270 @@ const TASK_ID_FIELDS = ["task_id", "TaskID"] as const;
 const ITEM_ID_FIELDS = ["ItemID", "item_id", "id", "ID"] as const;
 
 const SCENE_GENERAL_SEARCH = "综合页搜索";
+const VEDEM_SIGNATURE_EXPIRATION = 1800;
+
+type ResultFieldSchema = {
+  Datetime: string;
+  App: string;
+  Scene: string;
+  Params: string;
+  ItemID: string;
+  ItemCaption: string;
+  ItemCDNURL: string;
+  ItemURL: string;
+  ItemDuration: string;
+  UserName: string;
+  UserID: string;
+  UserAlias: string;
+  UserAuthEntity: string;
+  Tags: string;
+  LikeCount: string;
+  ViewCount: string;
+  CommentCount: string;
+  CollectCount: string;
+  ForwardCount: string;
+  ShareCount: string;
+  AnchorPoint: string;
+  PayMode: string;
+  Collection: string;
+  Episode: string;
+  PublishTime: string;
+  TaskID: string;
+  DeviceSerial: string;
+  Extra: string;
+};
+
+type SourceFieldSchema = {
+  TaskID: string;
+  DramaID: string;
+  DramaName: string;
+  TotalDuration: string;
+  EpisodeCount: string;
+  Priority: string;
+  RightsProtectionScenario: string;
+  BizTaskID: string;
+  AccountID: string;
+  AccountName: string;
+  SearchKeywords: string;
+  Platform: string;
+  CaptureDate: string;
+};
+
+function envField(name: string, def: string) {
+  return String(env(name, def)).trim() || def;
+}
+
+function resultFieldSchema(): ResultFieldSchema {
+  return {
+    Datetime: envField("RESULT_FIELD_DATETIME", "Datetime"),
+    App: envField("RESULT_FIELD_APP", "App"),
+    Scene: envField("RESULT_FIELD_SCENE", "Scene"),
+    Params: envField("RESULT_FIELD_PARAMS", "Params"),
+    ItemID: envField("RESULT_FIELD_ITEMID", "ItemID"),
+    ItemCaption: envField("RESULT_FIELD_ITEMCAPTION", "ItemCaption"),
+    ItemCDNURL: envField("RESULT_FIELD_ITEMCDNURL", "ItemCDNURL"),
+    ItemURL: envField("RESULT_FIELD_ITEMURL", "ItemURL"),
+    ItemDuration: envField("RESULT_FIELD_DURATION", "ItemDuration"),
+    UserName: envField("RESULT_FIELD_USERNAME", "UserName"),
+    UserID: envField("RESULT_FIELD_USERID", "UserID"),
+    UserAlias: envField("RESULT_FIELD_USERALIAS", "UserAlias"),
+    UserAuthEntity: envField("RESULT_FIELD_USERAUTHENTITY", "UserAuthEntity"),
+    Tags: envField("RESULT_FIELD_TAGS", "Tags"),
+    LikeCount: envField("RESULT_FIELD_LIKECOUNT", "LikeCount"),
+    ViewCount: envField("RESULT_FIELD_VIEWCOUNT", "ViewCount"),
+    CommentCount: envField("RESULT_FIELD_COMMENTCOUNT", "CommentCount"),
+    CollectCount: envField("RESULT_FIELD_COLLECTCOUNT", "CollectCount"),
+    ForwardCount: envField("RESULT_FIELD_FORWARDCOUNT", "ForwardCount"),
+    ShareCount: envField("RESULT_FIELD_SHARECOUNT", "ShareCount"),
+    AnchorPoint: envField("RESULT_FIELD_ANCHORPOINT", "AnchorPoint"),
+    PayMode: envField("RESULT_FIELD_PAYMODE", "PayMode"),
+    Collection: envField("RESULT_FIELD_COLLECTION", "Collection"),
+    Episode: envField("RESULT_FIELD_EPISODE", "Episode"),
+    PublishTime: envField("RESULT_FIELD_PUBLISHTIME", "PublishTime"),
+    TaskID: envField("RESULT_FIELD_TASKID", "TaskID"),
+    DeviceSerial: envField("RESULT_FIELD_DEVICE_SERIAL", "DeviceSerial"),
+    Extra: envField("RESULT_FIELD_EXTRA", "Extra"),
+  };
+}
+
+function sourceFieldSchema(): SourceFieldSchema {
+  return {
+    TaskID: envField("SOURCE_FIELD_TASK_ID", "TaskID"),
+    DramaID: envField("SOURCE_FIELD_DRAMA_ID", "DramaID"),
+    DramaName: envField("SOURCE_FIELD_DRAMA_NAME", "DramaName"),
+    TotalDuration: envField("SOURCE_FIELD_TOTAL_DURATION", "TotalDuration"),
+    EpisodeCount: envField("SOURCE_FIELD_EPISODE_COUNT", "EpisodeCount"),
+    Priority: envField("SOURCE_FIELD_PRIORITY", "Priority"),
+    RightsProtectionScenario: envField("SOURCE_FIELD_RIGHTS_SCENARIO", "RightsProtectionScenario"),
+    BizTaskID: envField("SOURCE_FIELD_BIZ_TASK_ID", "BizTaskID"),
+    AccountID: envField("SOURCE_FIELD_ACCOUNT_ID", "AccountID"),
+    AccountName: envField("SOURCE_FIELD_ACCOUNT_NAME", "AccountName"),
+    SearchKeywords: envField("SOURCE_FIELD_SEARCH_KEYWORDS", "SearchKeywords"),
+    Platform: envField("SOURCE_FIELD_PLATFORM", "Platform"),
+    CaptureDate: envField("SOURCE_FIELD_CAPTURE_DATE", "CaptureDate"),
+  };
+}
+
+function mapAppValue(app: string) {
+  const s = String(app || "").trim();
+  switch (s) {
+    case "com.smile.gifmaker":
+    case "com.jiangjia.gif":
+      return "快手";
+    case "com.tencent.mm":
+    case "com.tencent.xin":
+      return "微信视频号";
+    default:
+      return s;
+  }
+}
+
+function hasOwn(obj: Record<string, any> | null | undefined, key: string) {
+  return Boolean(obj) && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function toSnakeCase(input: string) {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  const runes = Array.from(s);
+  let out = "";
+  for (let i = 0; i < runes.length; i++) {
+    const ch = runes[i];
+    const code = ch.charCodeAt(0);
+    const isUpper = code >= 65 && code <= 90;
+    if (!isUpper) {
+      out += ch;
+      continue;
+    }
+    if (i > 0) {
+      const prev = runes[i - 1];
+      const prevCode = prev.charCodeAt(0);
+      const next = i + 1 < runes.length ? runes[i + 1] : "";
+      const nextCode = next ? next.charCodeAt(0) : 0;
+      const prevIsLowerOrDigit = (prevCode >= 97 && prevCode <= 122) || (prevCode >= 48 && prevCode <= 57);
+      const nextIsLower = nextCode >= 97 && nextCode <= 122;
+      if (prevIsLowerOrDigit || nextIsLower) out += "_";
+    }
+    out += ch.toLowerCase();
+  }
+  return out;
+}
+
+function bitableValueToString(value: any): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+  if (Array.isArray(value)) {
+    const isRichText = value.some((it) => it && typeof it === "object" && !Array.isArray(it) && "text" in it);
+    const parts = value
+      .map((it) => {
+        if (isRichText && it && typeof it === "object" && typeof (it as any).text === "string") {
+          return String((it as any).text || "").trim();
+        }
+        return bitableValueToString(it);
+      })
+      .filter(Boolean);
+    return (isRichText ? parts.join(" ") : parts.join(",")).trim();
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, any>;
+    for (const k of ["value", "values", "elements", "content"]) {
+      if (hasOwn(obj, k)) {
+        const nested = bitableValueToString(obj[k]);
+        if (nested) return nested;
+      }
+    }
+    if (typeof obj.text === "string" && obj.text.trim()) return obj.text.trim();
+    for (const k of ["link", "name", "en_name", "email", "id", "user_id", "url", "tmp_url", "file_token", "address"]) {
+      const v = bitableValueToString(obj[k]);
+      if (v) return v;
+    }
+    try {
+      return JSON.stringify(obj).trim();
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function bitableFieldString(fields: Record<string, any>, name: string) {
+  const key = String(name || "").trim();
+  if (!key || !hasOwn(fields, key)) return "";
+  return bitableValueToString(fields[key]);
+}
+
+function bitableFieldStringCompat(fields: Record<string, any>, rawKey: string): [string, boolean] {
+  const key = String(rawKey || "").trim();
+  if (!key || !fields) return ["", false];
+  if (hasOwn(fields, key)) return [bitableFieldString(fields, key), true];
+  const snake = toSnakeCase(key);
+  if (snake && hasOwn(fields, snake)) return [bitableFieldString(fields, snake), true];
+  return ["", false];
+}
+
+function flattenDramaFields(raw: Record<string, any>, schema: SourceFieldSchema) {
+  const payload: Record<string, any> = {};
+  for (const [engName, rawKey] of Object.entries(schema)) {
+    if (raw && hasOwn(raw, engName)) {
+      payload[engName] = bitableFieldString(raw, engName);
+      continue;
+    }
+    if (raw) {
+      payload[engName] = bitableFieldString(raw, rawKey);
+      continue;
+    }
+    payload[engName] = "";
+  }
+  return payload;
+}
+
+function flattenRecordsAndCollectItemIDs(records: Array<Record<string, any>>, schema: ResultFieldSchema) {
+  const result: Array<Record<string, any>> = [];
+  const seenItem = new Set<string>();
+  const rawItemKey = schema.ItemID;
+  const rawAppKey = schema.App;
+  for (const rec of records) {
+    if (rawItemKey) {
+      const [itemID, ok] = bitableFieldStringCompat(rec, rawItemKey);
+      if (ok && itemID) {
+        if (seenItem.has(itemID)) continue;
+        seenItem.add(itemID);
+      }
+    }
+    const recID = String(rec.record_id ?? rec._record_id ?? rec.id ?? "").trim();
+    const entry: Record<string, any> = { _record_id: recID };
+    for (const [engName, rawKey] of Object.entries(schema)) {
+      const [fieldValue, ok] = bitableFieldStringCompat(rec, rawKey);
+      if (!ok) {
+        entry[engName] = null;
+        continue;
+      }
+      entry[engName] = engName === "App" && rawKey === rawAppKey ? mapAppValue(fieldValue) : fieldValue;
+    }
+    result.push(entry);
+  }
+  return result;
+}
+
+function buildWebhookResultPayload(
+  dramaRaw: Record<string, any>,
+  records: Array<Record<string, any>>,
+  sourceSchema: SourceFieldSchema,
+  resultSchema: ResultFieldSchema,
+) {
+  const payload = flattenDramaFields(dramaRaw || {}, sourceSchema);
+  for (const [key, val] of Object.entries(dramaRaw || {})) {
+    const trimmed = String(key || "").trim();
+    if (!trimmed) continue;
+    if (hasOwn(payload, trimmed)) continue;
+    if (val == null) continue;
+    if (typeof val === "string" && !val.trim()) continue;
+    payload[trimmed] = val;
+  }
+  payload.records = flattenRecordsAndCollectItemIDs(records, resultSchema);
+  return payload;
+}
 
 function parseGroupUserKey(groupID: string) {
   const trimmed = String(groupID || "").trim();
@@ -289,6 +554,7 @@ function taskFields() {
     TaskID: env("TASK_FIELD_TASKID", "TaskID"),
     App: env("TASK_FIELD_APP", "App"),
     Scene: env("TASK_FIELD_SCENE", "Scene"),
+    Params: env("TASK_FIELD_PARAMS", "Params"),
     Date: env("TASK_FIELD_DATE", "Date"),
     Status: env("TASK_FIELD_STATUS", "Status"),
     GroupID: env("TASK_FIELD_GROUPID", "GroupID"),
@@ -396,10 +662,7 @@ function parseDramaInfo(raw: any) {
 
 async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: number[]) {
   if (!taskIDs.length) {
-    return {
-      records: [],
-      userInfo: {},
-    };
+    return { records: [] };
   }
   const source = createResultSource({
     dataSource: opts.dataSource || "sqlite",
@@ -410,37 +673,7 @@ async function collectPayloadFromResultSource(opts: DispatchOptions, taskIDs: nu
   });
   const rows = await source.fetchByTaskIDs(taskIDs);
 
-  let userID = "";
-  let userName = "";
-  let userAlias = "";
-  let userAuthEntity = "";
-  for (const row of rows) {
-    userID = String(pickField(row, ["user_id", "UserID"]) || "").trim();
-    userName = String(pickField(row, ["user_name", "UserName"]) || "").trim();
-    userAlias = String(pickField(row, ["user_alias", "UserAlias"]) || "").trim();
-    userAuthEntity = String(pickField(row, ["user_auth_entity", "UserAuthEntity"]) || "").trim();
-    if (userID || userName || userAlias || userAuthEntity) break;
-  }
-
-  const userInfo = { UserID: userID, UserName: userName, UserAlias: userAlias, UserAuthEntity: userAuthEntity };
-
-  const records = rows.map((row) => {
-    const itemID = String(pickField(row, [...ITEM_ID_FIELDS]) || "").trim();
-    const extra: Record<string, unknown> = {};
-    const knownKeys = ["item_id", "ItemID", "id", "ID", "user_id", "UserID", "user_name", "UserName", "user_alias", "UserAlias", "user_auth_entity", "UserAuthEntity", "task_id", "TaskID", "datetime", "Datetime"];
-    for (const [k, v] of Object.entries(row)) {
-      if (!knownKeys.includes(k)) {
-        extra[k] = v;
-      }
-    }
-    return {
-      ...row,
-      ItemID: itemID,
-      Extra: JSON.stringify(extra),
-    };
-  });
-
-  return { records, userInfo };
+  return { records: rows };
 }
 
 function normalizeKey(v: any) {
@@ -503,42 +736,45 @@ function equalTaskIDsByStatus(a: any, b: any) {
   return true;
 }
 
-function pickTaskMetaFromRows(taskRows: any[], userIDField: string, userNameField: string) {
+function pickTaskMetaFromRows(taskRows: any[], userIDField: string, userNameField: string, paramsField: string) {
   let userID = "";
   let userName = "";
+  let params = "";
   for (const r of taskRows) {
     const f = r?.fields || {};
     if (!userID) userID = String(firstText(f[userIDField]) || "").trim();
     if (!userName) userName = String(firstText(f[userNameField]) || "").trim();
-    if (userID && userName) break;
+    if (!params) params = String(firstText(f[paramsField]) || "").trim();
+    if (userID && userName && params) break;
   }
-  return { UserID: userID, UserName: userName };
+  return { UserID: userID, UserName: userName, Params: params };
 }
 
 
-function readRecordTaskID(fields: Record<string, unknown>) {
-  const tid = Math.trunc(Number(pickField(fields, [...TASK_ID_FIELDS]) || 0));
+function readRecordTaskID(fields: Record<string, unknown>, resultSchema: ResultFieldSchema) {
+  const tid = Math.trunc(Number(pickField(fields, ["TaskID", resultSchema.TaskID, "task_id"]) || 0));
   return Number.isFinite(tid) && tid > 0 ? tid : 0;
 }
 
-function readRecordUserKey(fields: Record<string, unknown>) {
-  const alias = normalizeKey(pickField(fields, ["UserAlias", "user_alias"]));
+function readRecordUserKey(fields: Record<string, unknown>, resultSchema: ResultFieldSchema) {
+  const alias = normalizeKey(pickField(fields, ["UserAlias", resultSchema.UserAlias, "user_alias"]));
   if (alias) return alias;
-  const uid = normalizeKey(pickField(fields, ["UserID", "user_id"]));
+  const uid = normalizeKey(pickField(fields, ["UserID", resultSchema.UserID, "user_id"]));
   if (uid) return uid;
-  return normalizeKey(pickField(fields, ["UserName", "user_name"]));
+  return normalizeKey(pickField(fields, ["UserName", resultSchema.UserName, "user_name"]));
 }
 
 function pickFirstNonEmptyCaptureFieldByTaskIDs(
   records: Array<Record<string, unknown>>,
   taskIDs: number[],
+  resultSchema: ResultFieldSchema,
   ...fieldNames: string[]
 ) {
   const ids = uniqInts(taskIDs);
   if (!ids.length || !records.length) return "";
   for (const id of ids) {
     for (const r of records) {
-      const tid = readRecordTaskID(r);
+      const tid = readRecordTaskID(r, resultSchema);
       if (tid !== id) continue;
       const v = normalizeKey(pickField(r, fieldNames));
       if (v) return v;
@@ -547,27 +783,12 @@ function pickFirstNonEmptyCaptureFieldByTaskIDs(
   return "";
 }
 
-
-function dedupRecordsByItemID(records: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  const seen = new Set<string>();
-  const out: Array<Record<string, unknown>> = [];
-  for (const r of records) {
-    const itemID = normalizeKey(pickField(r, [...ITEM_ID_FIELDS]));
-    if (itemID) {
-      if (seen.has(itemID)) continue;
-      seen.add(itemID);
-    }
-    out.push(r);
-  }
-  return out;
-}
-
-function buildRecordsByTaskID(taskIDs: number[], records: Array<Record<string, unknown>>) {
+function buildRecordsByTaskID(taskIDs: number[], records: Array<Record<string, unknown>>, resultSchema: ResultFieldSchema) {
   const itemsByTaskID = new Map<number, Set<string>>();
   for (const r of records) {
-    const tid = Math.trunc(Number(pickField(r, [...TASK_ID_FIELDS]) || 0));
+    const tid = readRecordTaskID(r, resultSchema);
     if (!Number.isFinite(tid) || tid <= 0) continue;
-    const itemID = normalizeKey(pickField(r, [...ITEM_ID_FIELDS]));
+    const itemID = normalizeKey(pickField(r, ["ItemID", resultSchema.ItemID, "item_id", "id", "ID"]));
     if (!itemID) continue;
     if (!itemsByTaskID.has(tid)) itemsByTaskID.set(tid, new Set());
     itemsByTaskID.get(tid)!.add(itemID);
@@ -599,13 +820,44 @@ function truncateRecordsByTaskID(
 
 async function postWebhook(baseURL: string, payload: any) {
   const url = `${baseURL.replace(/\/+$/, "")}/drama/webhook/grab-finished`;
+  const body = JSON.stringify(payload);
+  const auth = buildVedemAgwTokenSigned(body);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (auth) headers["Agw-Auth"] = auth;
+  if (isTraceLogEnabled()) {
+    console.error(`[webhook][trace] request url=${url}`);
+    console.error(`[webhook][trace] request headers=${JSON.stringify(headers)}`);
+    console.error(`[webhook][trace] request body=${JSON.stringify(payload, null, 2)}`);
+  }
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload),
+    headers,
+    body,
   });
   const txt = await res.text();
   if (!res.ok) throw new Error(`webhook http ${res.status}: ${txt}`);
+}
+
+function sha256HMACHex(key: string, data: string) {
+  return createHmac("sha256", Buffer.from(String(key || ""), "utf-8"))
+    .update(Buffer.from(String(data || ""), "utf-8"))
+    .digest("hex");
+}
+
+function buildVedemAgwTokenSigned(body: string) {
+  const ak = String(env("VEDEM_DRAMA_AK", "") || "").trim();
+  const sk = String(env("VEDEM_DRAMA_SK", "") || "").trim();
+  if (!ak || !sk) return "";
+  const nowUnix = Math.trunc(Date.now() / 1000);
+  const signKeyInfo = `auth-v2/${ak}/${nowUnix}/${VEDEM_SIGNATURE_EXPIRATION}`;
+  const signKey = sha256HMACHex(sk, signKeyInfo);
+  const signResult = sha256HMACHex(signKey, body);
+  return `${signKeyInfo}/${signResult}`;
+}
+
+function isTraceLogEnabled() {
+  const level = String(env("LOG_LEVEL", "info") || "info").trim().toLowerCase();
+  return level === "trace";
 }
 
 export async function resolveGroupFromTaskID(taskID: number) {
@@ -638,6 +890,8 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   const ctx: FeishuCtx = { baseURL, token };
   const tf = taskFields();
   const wf = webhookFields();
+  const resultSchema = resultFieldSchema();
+  const sourceSchema = sourceFieldSchema();
 
   const day = opts.day || todayLocal();
   const dayMs = dayStartMs(day);
@@ -731,7 +985,7 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
   const dramaInfo = parseDramaInfo(planFields[wf.DramaInfo]);
   const { records: sourceRecords } = await collectPayloadFromResultSource(opts, taskIDs);
 
-  const meta = pickTaskMetaFromRows(allTaskRows, tf.UserID, tf.UserName);
+  const meta = pickTaskMetaFromRows(allTaskRows, tf.UserID, tf.UserName, tf.Params);
   const groupUserKey = normalizeKey(parseGroupUserKey(opts.groupID)) || normalizeKey(meta.UserID);
 
   const sceneByTaskID = new Map<number, string>();
@@ -751,13 +1005,13 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
 
   const filteredRecords: Array<Record<string, unknown>> = [];
   for (const rec of sourceRecords) {
-    const tid = readRecordTaskID(rec);
+    const tid = readRecordTaskID(rec, resultSchema);
     if (tid <= 0 || !allowedTaskIDs.has(tid)) continue;
     const scene = String(sceneByTaskID.get(tid) || "").trim();
     if (strictSceneFilter && scene === SCENE_GENERAL_SEARCH) {
       strictTotal++;
       if (!groupUserKey) continue;
-      const userKey = normalizeKey(readRecordUserKey(rec));
+      const userKey = normalizeKey(readRecordUserKey(rec, resultSchema));
       if (!userKey) {
         strictMissingUserKey++;
         continue;
@@ -768,8 +1022,22 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
     filteredRecords.push(rec);
   }
 
-  const userAlias = pickFirstNonEmptyCaptureFieldByTaskIDs(filteredRecords, taskIDs, "UserAlias", "user_alias");
-  const userAuthEntity = pickFirstNonEmptyCaptureFieldByTaskIDs(filteredRecords, taskIDs, "UserAuthEntity", "user_auth_entity");
+  const userAlias = pickFirstNonEmptyCaptureFieldByTaskIDs(
+    filteredRecords,
+    taskIDs,
+    resultSchema,
+    "UserAlias",
+    resultSchema.UserAlias,
+    "user_alias",
+  );
+  const userAuthEntity = pickFirstNonEmptyCaptureFieldByTaskIDs(
+    filteredRecords,
+    taskIDs,
+    resultSchema,
+    "UserAuthEntity",
+    resultSchema.UserAuthEntity,
+    "user_auth_entity",
+  );
   const finalUserInfo = {
     UserID: String(meta.UserID || "").trim(),
     UserName: String(meta.UserName || "").trim(),
@@ -777,9 +1045,11 @@ export async function processOneGroup(opts: DispatchOptions): Promise<DispatchRe
     UserAuthEntity: String(userAuthEntity || "").trim(),
   };
 
-  const payloadRecords = dedupRecordsByItemID(filteredRecords);
-  const { recordsByTaskID, missingRecordTaskIDs } = buildRecordsByTaskID(taskIDs, filteredRecords);
-  const payload = { ...dramaInfo, records: payloadRecords, UserInfo: finalUserInfo };
+  const { recordsByTaskID, missingRecordTaskIDs } = buildRecordsByTaskID(taskIDs, filteredRecords, resultSchema);
+  const payload = buildWebhookResultPayload(dramaInfo, filteredRecords, sourceSchema, resultSchema) as Record<string, any>;
+  if (!String(payload.DramaName || "").trim()) payload.DramaName = String(meta.Params || "").trim();
+  payload.UserInfo = finalUserInfo;
+  const payloadRecords = Array.isArray(payload.records) ? payload.records : [];
 
   if (missingRecordTaskIDs.length) {
     console.error(
