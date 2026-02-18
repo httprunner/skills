@@ -24,7 +24,8 @@ npx tsx scripts/piracy_pipeline.ts --task-ids <TASK_ID_1,TASK_ID_2,...>
 ```
 
 说明：`piracy_pipeline.ts` 保留为兼容壳，内部复用 detect runner + create/upsert。
-默认会按 `--task-app com.tencent.mm --task-date Today` 扫描；`--task-app/--task-date` 均支持 CSV 多值（例如 `com.tencent.mm,com.smile.gifmaker` 与 `Today,Yesterday`）。`--task-ids` 与 `--task-app/--task-date` 互斥。
+默认会按 `--task-app com.tencent.mm --task-date Today` 扫描；`--task-app/--task-date` 均支持 CSV 多值（例如 `--task-date Today,Yesterday`）。
+当 `--task-date` 提供多个值时，处理顺序按输入优先级依次进行（如 `Today` 优先于 `Yesterday`）。`--task-ids` 与 `--task-app/--task-date` 互斥。
 
 ### C. webhook 触发与补偿
 

@@ -45,6 +45,11 @@ export type ResolveDetectTaskUnitsOptions = {
   taskLimit?: string;
 };
 
+type UnitOrderPriority = {
+  day: Map<string, number>;
+  app: Map<string, number>;
+};
+
 function parseTaskIDs(csv: string): number[] {
   const ids = String(csv || "")
     .split(",")
@@ -106,6 +111,24 @@ function resolveDateFilter(v: string): string {
   if (lower === "today") return todayLocal();
   if (lower === "yesterday") return yesterdayLocal();
   return toDay(trimmed) || trimmed;
+}
+
+function buildUnitOrderPriority(taskApps: string[], taskDates: string[]): UnitOrderPriority {
+  const appPriority = new Map<string, number>();
+  for (const [idx, app] of taskApps.entries()) {
+    const key = normalizeText(app);
+    if (!key || appPriority.has(key)) continue;
+    appPriority.set(key, idx);
+  }
+
+  const dayPriority = new Map<string, number>();
+  for (const [idx, token] of taskDates.entries()) {
+    const resolved = resolveDateFilter(token);
+    const key = normalizeText(resolved);
+    if (!key || key === "any" || dayPriority.has(key)) continue;
+    dayPriority.set(key, idx);
+  }
+  return { day: dayPriority, app: appPriority };
 }
 
 function markReason(reasonCounter: Record<string, number>, reason: string) {
@@ -284,9 +307,10 @@ export function resolveDetectTaskUnitsDetailed(args: ResolveDetectTaskUnitsOptio
   const taskApps = parseTaskApps(String(args.taskApp || ""));
   const taskDates = parseTaskDates(String(args.taskDate || ""));
   const taskLimit = parseNonNegativeInt(String(args.taskLimit || "0"), "task limit");
+  const unitOrderPriority = buildUnitOrderPriority(taskApps, taskDates);
 
-  for (const app of taskApps) {
-    for (const dateToken of taskDates) {
+  for (const dateToken of taskDates) {
+    for (const app of taskApps) {
       const fetchArgs = ["--app", app, "--scene", taskScene, "--status", "Any", "--date", dateToken];
       if (taskLimit > 0) fetchArgs.push("--limit", String(taskLimit));
 
@@ -330,7 +354,26 @@ export function resolveDetectTaskUnitsDetailed(args: ResolveDetectTaskUnitsOptio
       `no tasks matched from feishu after local filter: app=${taskApps.join(",")}, scene=${taskScene}, date=${taskDates.join(",")}, limit=${taskLimit}`,
     );
   }
-  return buildUnitsFromTasks(scannedTasks);
+  const built = buildUnitsFromTasks(scannedTasks);
+  built.readyUnits.sort((a, b) => {
+    const dayA = unitOrderPriority.day.get(normalizeText(a.day));
+    const dayB = unitOrderPriority.day.get(normalizeText(b.day));
+    if (dayA !== undefined || dayB !== undefined) {
+      const va = dayA ?? Number.MAX_SAFE_INTEGER;
+      const vb = dayB ?? Number.MAX_SAFE_INTEGER;
+      if (va !== vb) return va - vb;
+    }
+
+    const appA = unitOrderPriority.app.get(normalizeText(a.parent.app));
+    const appB = unitOrderPriority.app.get(normalizeText(b.parent.app));
+    if (appA !== undefined || appB !== undefined) {
+      const va = appA ?? Number.MAX_SAFE_INTEGER;
+      const vb = appB ?? Number.MAX_SAFE_INTEGER;
+      if (va !== vb) return va - vb;
+    }
+    return a.anchorTaskID - b.anchorTaskID;
+  });
+  return built;
 }
 
 export function resolveDetectTaskUnits(args: ResolveDetectTaskUnitsOptions): DetectTaskUnit[] {

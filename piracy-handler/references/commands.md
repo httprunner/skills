@@ -49,6 +49,7 @@ npx tsx scripts/piracy_detect.ts --task-date Today --data-source supabase
 - `--task-ids` 与 `--task-app/--task-date` 互斥；
 - 指定 `--task-ids` 时，按 TaskID 检测；
 - 未指定 `--task-ids` 时，按飞书筛选条件检测（未传 `--task-app` 时默认 `com.tencent.mm`，未传 `--task-date` 时默认 `Today`）。
+- 传入多个 `--task-date` 值时，按输入顺序作为优先级依次处理（例如 `Today,Yesterday` 先处理 `Today`）。
 
 检测语义说明：
 - 仅纳入 `status=success` 的综合页任务结果行参与聚合；
@@ -95,6 +96,7 @@ npx tsx scripts/piracy_pipeline.ts \
   --task-app com.tencent.mm,com.smile.gifmaker \
   --task-date Today,Yesterday \
   --dry-run
+
 ```
 
 主要参数：
@@ -108,6 +110,7 @@ npx tsx scripts/piracy_pipeline.ts \
 前置校验语义：
 
 - 任务分组键为 `App + BookID + Date`
+- 多日期输入时，按 `--task-date` 提供顺序优先处理
 - 若分组内存在 `status != success|error`，整组跳过
 - 若分组内任一任务 `ItemsCollected` 为空或非数字，整组跳过
 - 从 `capture_results` 按分组 `task_ids` 拉取结果后，按 `task_id` 分别统计 `distinct item_id`（空 `item_id` 使用行级 fallback）
