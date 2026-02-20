@@ -6,6 +6,7 @@
 - `scripts/piracy_create_subtasks.ts`: 基于 `detect.json` 创建子任务。
 - `scripts/upsert_webhook_plan.ts`: webhook plan 统一入口（支持 detect 输入与通用 plan 输入）。
   - 幂等键：`BizType + Date + GroupID`；查重按目标键精确查询，不依赖全表扫描。
+- `scripts/dedupe_webhook_plans.ts`: 一次性存量去重脚本（默认执行删除，`--dry-run` 仅预览；不支持 `WEBHOOK_USE_VIEW=true`）。
 - `scripts/piracy_pipeline.ts`: 兼容入口（detect + create + upsert）。
 - `scripts/webhook.ts`: webhook 统一入口（单 group 推送 + 按日期批量补偿）。
 - `scripts/whitelist_check.ts`: 调用 crawler exemption 接口。

@@ -8,6 +8,7 @@
     "create-subtasks": "tsx scripts/piracy_create_subtasks.ts",
     "webhook": "tsx scripts/webhook.ts",
     "upsert-plan": "tsx scripts/upsert_webhook_plan.ts",
+    "dedupe-plans": "tsx scripts/dedupe_webhook_plans.ts",
     "whitelist-check": "tsx scripts/whitelist_check.ts",
     "pipeline": "tsx scripts/piracy_pipeline.ts"
   },

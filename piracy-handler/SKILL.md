@@ -52,6 +52,9 @@ npx tsx scripts/webhook.ts --mode reconcile --date <YYYY-MM-DD> --data-source <s
 去重键为 `BizType + Date + GroupID`，按目标键精确查询历史记录，避免大表场景下重复创建。
 - `scripts/webhook.ts`
 作用：webhook 统一入口；`--mode single` 用于单 group 触发，`--mode reconcile` 用于按日期批量补偿。
+- `scripts/dedupe_webhook_plans.ts`
+作用：一次性清理 webhook 计划表中的历史重复记录（默认执行删除，`--dry-run` 仅预览）。
+运行约束：需确保 `WEBHOOK_USE_VIEW` 关闭，避免视图过滤导致清理不完整。
 
 ## 4) 公共模块（重构后）
 

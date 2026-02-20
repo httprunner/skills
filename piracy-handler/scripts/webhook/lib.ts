@@ -557,6 +557,18 @@ export async function batchUpdate(ctx: FeishuCtx, bitableURL: string, records: A
   }
 }
 
+export async function batchDelete(ctx: FeishuCtx, bitableURL: string, recordIDs: string[]) {
+  const ids = Array.from(new Set(recordIDs.map((x) => String(x || "").trim()).filter(Boolean)));
+  if (!ids.length) return;
+  const ref = parseBitableURL(bitableURL);
+  if (!ref.appToken && ref.wikiToken) ref.appToken = await resolveWikiToken(ctx.baseURL, ctx.token, ref.wikiToken);
+  if (!ref.appToken) throw new Error("bitable app token missing");
+  const url = `${ctx.baseURL}/open-apis/bitable/v1/apps/${ref.appToken}/tables/${ref.tableID}/records/batch_delete`;
+  for (let i = 0; i < ids.length; i += 500) {
+    await requestJSON("POST", url, ctx.token, { records: ids.slice(i, i + 500) });
+  }
+}
+
 // ---------- field name configs ----------
 
 function taskFields() {

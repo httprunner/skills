@@ -166,3 +166,28 @@ ready 语义说明：
 ```bash
 npx tsx scripts/whitelist_check.ts --book-id 7386963157631110169 --account-id 123 --has-short-play-tag true
 ```
+
+## 7. dedupe_webhook_plans.ts
+
+一次性存量去重脚本：按 `BizType + Date + GroupID` 聚合 webhook plan，保留最新（`UpdateAt` 最大，其次 `record_id` 最大）记录，其余重复记录直接删除。
+
+```bash
+# dry-run 预览（仅输出统计）
+npx tsx scripts/dedupe_webhook_plans.ts --dry-run
+
+# 按业务 + 日期范围预览
+npx tsx scripts/dedupe_webhook_plans.ts --biz-type piracy_general_search --date Today,Yesterday --dry-run
+
+# 默认即执行删除
+npx tsx scripts/dedupe_webhook_plans.ts --biz-type piracy_general_search --date 2026-02-19
+```
+
+主要参数：
+- `--biz-type <csv>`：可选，按 BizType 过滤。
+- `--date <csv>`：可选，支持 `yyyy-mm-dd`、`Today`、`Yesterday`。
+- `--limit <n>`：扫描上限（默认 `50000`）。
+- `--sample <n>`：结果中采样展示重复 key 数（默认 `20`）。
+- `--dry-run`：仅预览，不执行删除；未传时默认执行删除。
+
+注意事项：
+- `dedupe_webhook_plans.ts` 不支持 `WEBHOOK_USE_VIEW=true`（会直接报错），避免视图过滤导致清理范围不完整。
