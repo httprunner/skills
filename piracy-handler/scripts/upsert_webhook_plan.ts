@@ -2,13 +2,16 @@
 import { Command } from "commander";
 import { chunk, readInput as readTextInput, runTaskFetch, todayLocal } from "./shared/lib";
 import {
+  andFilter,
   batchCreate,
   batchUpdate,
+  condition,
   dayStartMs,
   env,
   type FeishuCtx,
   getTenantToken,
   must,
+  orFilter,
   parseTaskIDs,
   readInput,
   searchRecords,
@@ -34,6 +37,15 @@ type UpsertItem = {
   app?: string;
   task_ids: number[];
   drama_info?: string;
+};
+
+type ExistingPlanRow = {
+  recordID: string;
+  updateAtMs: number;
+  taskIDs: number[];
+  app: string;
+  dramaInfo: string;
+  taskIDsByStatusRaw: string;
 };
 
 function isSamePositiveIntSet(a: number[], b: number[]): boolean {
@@ -147,6 +159,27 @@ function normalizeTextValue(v: any): string {
     if ((v as any).text != null) return normalizeTextValue((v as any).text);
   }
   return String(v).trim();
+}
+
+function parseMsValue(v: any): number {
+  const raw = normalizeTextValue(v);
+  if (!raw) return 0;
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function compareExistingPlan(a: ExistingPlanRow, b: ExistingPlanRow): number {
+  if (a.updateAtMs !== b.updateAtMs) return a.updateAtMs - b.updateAtMs;
+  return String(a.recordID).localeCompare(String(b.recordID));
+}
+
+function makeUpsertKey(bizType: string, day: string, groupID: string): string {
+  return `${bizType}@@${day}@@${groupID}`;
+}
+
+function isTruthyEnv(v: string): boolean {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
 }
 
 function parseCLI(argv: string[]): CLIOptions {
@@ -330,6 +363,72 @@ function buildDetectItems(args: CLIOptions, bizTypeDefault: string, inputText?: 
   return buildUpsertItemsFromDetect(detectObj, bizTypeDefault);
 }
 
+async function resolveExistingPlansByKeys(
+  ctx: FeishuCtx,
+  webhookURL: string,
+  wf: ReturnType<typeof webhookFields>,
+  items: UpsertItem[],
+  bizTypeDefault: string,
+): Promise<Map<string, ExistingPlanRow>> {
+  const targetBuckets = new Map<string, { bizType: string; dayMs: number; groupIDs: Set<string> }>();
+  for (const it of items) {
+    const day = normalizeDayValue(it.date);
+    const dayMs = dayStartMs(day);
+    if (!dayMs) throw new Error(`invalid date: ${it.date}`);
+    const bizType = it.biz_type || bizTypeDefault;
+    const groupID = String(it.group_id || "").trim();
+    if (!groupID) continue;
+    const bucketKey = `${bizType}@@${dayMs}`;
+    const exist = targetBuckets.get(bucketKey);
+    if (exist) {
+      exist.groupIDs.add(groupID);
+      continue;
+    }
+    targetBuckets.set(bucketKey, {
+      bizType,
+      dayMs,
+      groupIDs: new Set([groupID]),
+    });
+  }
+
+  const existingByKey = new Map<string, ExistingPlanRow>();
+  for (const bucket of targetBuckets.values()) {
+    const groupIDs = Array.from(bucket.groupIDs);
+    for (const batch of chunk(groupIDs, 40)) {
+      const groupFilter = orFilter(batch.map((gid) => condition(wf.GroupID, "is", gid)));
+      const filter = andFilter(
+        [
+          condition(wf.BizType, "is", bucket.bizType),
+          condition(wf.Date, "is", "ExactDate", String(bucket.dayMs)),
+        ],
+        [groupFilter],
+      );
+      const rows = await searchRecords(ctx, webhookURL, filter, 200, 500);
+      for (const r of rows) {
+        const recordID = String(r.record_id || "").trim();
+        const bizType = normalizeTextValue(r?.fields?.[wf.BizType]);
+        const groupID = normalizeTextValue(r?.fields?.[wf.GroupID]);
+        const day = normalizeDayValue(r?.fields?.[wf.Date]);
+        if (!recordID || !bizType || !groupID || !day) continue;
+        const key = makeUpsertKey(bizType, day, groupID);
+        const next: ExistingPlanRow = {
+          recordID,
+          updateAtMs: parseMsValue(r?.fields?.[wf.UpdateAt]),
+          taskIDs: parseTaskIDs(r?.fields?.[wf.TaskIDs]),
+          app: normalizeTextValue(r?.fields?.[wf.App]),
+          dramaInfo: normalizeTextValue(r?.fields?.[wf.DramaInfo]),
+          taskIDsByStatusRaw: normalizeTextValue(r?.fields?.[wf.TaskIDsByStatus]),
+        };
+        const cur = existingByKey.get(key);
+        if (!cur || compareExistingPlan(cur, next) < 0) {
+          existingByKey.set(key, next);
+        }
+      }
+    }
+  }
+  return existingByKey;
+}
+
 async function main() {
   const args = parseCLI(process.argv);
   const dryRun = Boolean(args.dryRun);
@@ -359,43 +458,13 @@ async function main() {
   const appSecret = must("FEISHU_APP_SECRET");
   const webhookURL = must("WEBHOOK_BITABLE_URL");
   const baseURL = env("FEISHU_BASE_URL", "https://open.feishu.cn").replace(/\/+$/, "");
+  if (isTruthyEnv(env("WEBHOOK_USE_VIEW", "false"))) {
+    throw new Error("WEBHOOK_USE_VIEW=true is not supported for upsert_webhook_plan; disable it to ensure full-table dedupe visibility");
+  }
   const token = await getTenantToken(baseURL, appID, appSecret);
   const ctx: FeishuCtx = { baseURL, token };
   const wf = webhookFields();
-
-  const scanLimit = Math.trunc(Number(env("WEBHOOK_UPSERT_SCAN_LIMIT", "10000"))) || 10000;
-  const targetKeys = new Set<string>();
-  for (const it of normalized) {
-    const day = normalizeDayValue(it.date);
-    const dayMs = dayStartMs(day);
-    if (!dayMs) throw new Error(`invalid date: ${it.date}`);
-    const bizType = it.biz_type || bizTypeDefault;
-    targetKeys.add(`${bizType}@@${day}@@${it.group_id}`);
-  }
-
-  const allRows = await searchRecords(ctx, webhookURL, null, 200, scanLimit);
-  const existingByKey = new Map<
-    string,
-    { recordID: string; taskIDs: number[]; app: string; dramaInfo: string; taskIDsByStatusRaw: string; status: string }
-  >();
-  for (const r of allRows) {
-    const recordID = String(r.record_id || "").trim();
-    const bizType = normalizeTextValue(r?.fields?.[wf.BizType]);
-    const groupID = normalizeTextValue(r?.fields?.[wf.GroupID]);
-    const day = normalizeDayValue(r?.fields?.[wf.Date]);
-    if (!recordID || !bizType || !groupID || !day) continue;
-    const key = `${bizType}@@${day}@@${groupID}`;
-    if (targetKeys.has(key) && !existingByKey.has(key)) {
-      existingByKey.set(key, {
-        recordID,
-        taskIDs: parseTaskIDs(r?.fields?.[wf.TaskIDs]),
-        app: normalizeTextValue(r?.fields?.[wf.App]),
-        dramaInfo: normalizeTextValue(r?.fields?.[wf.DramaInfo]),
-        taskIDsByStatusRaw: normalizeTextValue(r?.fields?.[wf.TaskIDsByStatus]),
-        status: normalizeTextValue(r?.fields?.[wf.Status]),
-      });
-    }
-  }
+  const existingByKey = await resolveExistingPlansByKeys(ctx, webhookURL, wf, normalized, bizTypeDefault);
 
   const createRows: Array<{ fields: Record<string, any> }> = [];
   const updateRows: Array<{ record_id: string; fields: Record<string, any> }> = [];
@@ -406,9 +475,8 @@ async function main() {
     const dayMs = dayStartMs(day);
     if (!dayMs) throw new Error(`invalid date: ${it.date}`);
     const bizType = it.biz_type || bizTypeDefault;
-    const k = `${bizType}@@${day}@@${it.group_id}`;
+    const k = makeUpsertKey(bizType, day, it.group_id);
     const taskIDsPayload = encodeTaskIDsByStatus(it.task_ids);
-    const taskIDsByStatusPayload = taskIDsPayload;
     const dramaInfo = it.drama_info || "";
     const app = String(it.app || "").trim();
     const taskIDsByStatusField =
@@ -420,11 +488,11 @@ async function main() {
       const taskIDsChanged = !isSamePositiveIntSet(exist.taskIDs, it.task_ids);
       const appChanged = Boolean(app && wf.App && !isSameText(app, exist.app));
       const dramaChanged = Boolean(dramaInfo && wf.DramaInfo && !isSameText(dramaInfo, exist.dramaInfo));
-      const byStatusChanged = Boolean(taskIDsByStatusField && !isSameText(taskIDsByStatusPayload, exist.taskIDsByStatusRaw));
+      const byStatusChanged = Boolean(taskIDsByStatusField && !isSameText(taskIDsPayload, exist.taskIDsByStatusRaw));
 
       const fields: Record<string, any> = {};
       if (taskIDsChanged) fields[wf.TaskIDs] = taskIDsPayload;
-      if (taskIDsByStatusField && byStatusChanged) fields[taskIDsByStatusField] = taskIDsByStatusPayload;
+      if (taskIDsByStatusField && byStatusChanged) fields[taskIDsByStatusField] = taskIDsPayload;
       if (appChanged && wf.App) fields[wf.App] = app;
       if (dramaChanged && wf.DramaInfo) fields[wf.DramaInfo] = dramaInfo;
       if (taskIDsChanged) {
@@ -449,7 +517,7 @@ async function main() {
         [wf.GroupID]: it.group_id,
         [wf.Status]: "pending",
         [wf.TaskIDs]: taskIDsPayload,
-        ...(taskIDsByStatusField ? { [taskIDsByStatusField]: taskIDsByStatusPayload } : {}),
+        ...(taskIDsByStatusField ? { [taskIDsByStatusField]: taskIDsPayload } : {}),
         ...(dramaInfo ? { [wf.DramaInfo]: dramaInfo } : {}),
         [wf.Date]: dayMs,
         [wf.RetryCount]: 0,

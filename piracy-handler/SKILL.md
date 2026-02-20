@@ -49,6 +49,7 @@ npx tsx scripts/webhook.ts --mode reconcile --date <YYYY-MM-DD> --data-source <s
 作用：基于 detect.json 创建子任务（个人页/合集/锚点）。
 - `scripts/upsert_webhook_plan.ts`
 作用：webhook plan 唯一入口；支持 `--source detect`（从 detect.json 产出计划）与 `--source plan`（通用计划输入）。
+去重键为 `BizType + Date + GroupID`，按目标键精确查询历史记录，避免大表场景下重复创建。
 - `scripts/webhook.ts`
 作用：webhook 统一入口；`--mode single` 用于单 group 触发，`--mode reconcile` 用于按日期批量补偿。
 

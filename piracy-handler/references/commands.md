@@ -80,6 +80,12 @@ npx tsx scripts/upsert_webhook_plan.ts --source plan --input plans.jsonl
 npx tsx scripts/upsert_webhook_plan.ts --source plan --group-id "微信视频号_123_xxx" --task-id 111,222 --date 2026-02-15
 ```
 
+幂等语义说明：
+- upsert 去重键为 `BizType + Date + GroupID`；
+- 查重采用按目标键精确查询（而非全表扫描），避免在大表场景下因扫描上限导致重复创建；
+- 若表内已存在同键多条记录，默认选择 `UpdateAt` 最新（其次 `record_id` 最大）那条作为更新目标。
+- `upsert_webhook_plan.ts` 不支持 `WEBHOOK_USE_VIEW=true`（会直接报错），避免视图过滤导致漏查重。
+
 ## 4. piracy_pipeline.ts
 
 兼容入口：一条命令跑 `detect + create_subtasks + upsert_webhook_plan`。
