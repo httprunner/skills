@@ -1,4 +1,0 @@
-interface:
-  display_name: "AI Vision"
-  short_description: "Multimodal UI querying and single-step planning"
-  default_prompt: "Use a vision LLM to extract UI element coordinates, verify assertions, and plan the next UI action."
