@@ -1,17 +1,17 @@
 # Supabase API and Error Handling
 
-## APIs Used
+## API Contract
 
-The reporter uses `@supabase/supabase-js` with service-role credentials:
+Use `@supabase/supabase-js` with service-role credentials:
 
 - `createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)`
 - `from(<table>).upsert(records, { onConflict: "task_id,item_id" })`
 
 Notes:
-- Upsert key is `(task_id, item_id)`.
+- Upsert key is `(task_id, item_id)` and must have a unique constraint in Supabase.
 - `item_id` is resolved from sqlite `ItemID`; fallback is `ItemURL` when `ItemID` is empty/null.
 
-## Required Inputs
+## Required Inputs for `report`
 
 - `SUPABASE_URL`: project URL, e.g. `https://<project>.supabase.co`
 - `SUPABASE_SERVICE_ROLE_KEY`: service role key with write access
@@ -19,13 +19,14 @@ Notes:
 Optional:
 - `SUPABASE_RESULT_TABLE` or `--supabase-table <name>`
 
-## Batch and Throughput
+## Batch Behavior
 
 - Default `--batch-size 100`
 - Allowed range in script: `1..1000`
-- Reporter paginates sqlite rows and uploads in chunks
+- Paginate sqlite rows and upload in chunks
+- Fallback to single-row upload when batch upsert fails
 
-## Failure Handling
+## Writeback Rules
 
 On report failure, sqlite writeback marks each failed row:
 
@@ -46,7 +47,7 @@ On success:
 - Missing target table or schema mismatch
 - `onConflict` columns not backed by a unique constraint
 
-## Practical Triage
+## Practical Triage Steps
 
 1. Run `report --dry-run` to confirm selection and filters.
 2. Confirm table DDL includes unique key for `(task_id, item_id)`.

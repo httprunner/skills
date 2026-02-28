@@ -1,7 +1,6 @@
 #!/usr/bin/env -S npx tsx
 
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -25,6 +24,7 @@ type CaptureRow = {
   UserAuthEntity: string | null;
   Tags: string | null;
   TaskID: number | null;
+  BookID: string | null;
   Extra: string | null;
   LikeCount: number | null;
   ViewCount: number | null;
@@ -69,30 +69,7 @@ type RetryResetOptions = {
   scene?: string;
 };
 
-type CollectOptions = {
-  dbPath?: string;
-  table?: string;
-  taskId?: string;
-};
-
-type CollectStopOptions = {
-  serial?: string;
-};
-
 type IntString = number | string | null | undefined;
-
-type CollectState = {
-  serial: string;
-  bundleID: string;
-  taskID: string;
-  pid: number;
-  dbPath: string;
-  table: string;
-  countBefore: number;
-  maxIDBefore: number;
-  startedAt: number;
-  artifactDir: string;
-};
 
 type SupabaseCaptureRecord = {
   datetime?: number | null;
@@ -111,6 +88,7 @@ type SupabaseCaptureRecord = {
   user_auth_entity?: string | null;
   tags?: string | null;
   task_id?: number | null;
+  book_id?: string | null;
   extra?: string | null;
   like_count?: number | null;
   view_count?: number | null;
@@ -128,7 +106,6 @@ type SupabaseCaptureRecord = {
 const DEFAULT_DB_PATH = join(homedir(), ".eval", "records.sqlite");
 const DEFAULT_TABLE = "capture_results";
 const DEFAULT_SUPABASE_TABLE = "capture_results";
-const COLLECT_STATE_DIR = join(homedir(), ".eval", "collectors");
 const REPORT_PAGE_SIZE = 200;
 
 const program = new Command();
@@ -335,7 +312,7 @@ function fetchRowsPage(opts: FilterOptions, limit: number, afterID: number): Cap
   const sql = `
 SELECT id, Datetime, DeviceSerial, App, Scene, Params, ItemID, ItemCaption,
        ItemCDNURL, ItemURL, ItemDuration, UserName, UserID, UserAlias,
-       UserAuthEntity, Tags, TaskID, Extra, LikeCount, ViewCount, AnchorPoint,
+       UserAuthEntity, Tags, TaskID, BookID, Extra, LikeCount, ViewCount, AnchorPoint,
        CommentCount, CollectCount, ForwardCount, ShareCount, PayMode, Collection,
        Episode, PublishTime
 FROM ${table}
@@ -343,246 +320,6 @@ ${whereSQL}
 ORDER BY id ASC
 LIMIT ${limit};`;
   return runSQLiteJSON<CaptureRow[]>(opts.dbPath, sql);
-}
-
-function countRows(dbPath: string, table: string): number {
-  const qTable = quoteIdent(table);
-  const rows = runSQLiteJSON<Array<{ count: number | string }>>(dbPath, `SELECT COUNT(*) AS count FROM ${qTable};`);
-  return parseCount(rows[0]?.count);
-}
-
-function maxRowID(dbPath: string, table: string): number {
-  const qTable = quoteIdent(table);
-  const rows = runSQLiteJSON<Array<{ max_id: number | string | null }>>(
-    dbPath,
-    `SELECT COALESCE(MAX(id), 0) AS max_id FROM ${qTable};`,
-  );
-  return parseCount(rows[0]?.max_id);
-}
-
-function countRowsByTaskAfterID(dbPath: string, table: string, taskID: string, afterID: number): number {
-  const qTable = quoteIdent(table);
-  const sql = `SELECT COUNT(*) AS count FROM ${qTable} WHERE id > ${afterID} AND TaskID = ${sqlLiteral(taskID)};`;
-  const rows = runSQLiteJSON<Array<{ count: number | string }>>(dbPath, sql);
-  return parseCount(rows[0]?.count);
-}
-
-function validateTaskID(taskID: string): string {
-  const trimmed = taskID.trim();
-  if (trimmed === "") {
-    throw new Error("--task-id is required");
-  }
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`invalid --task-id: ${taskID}; expected digits only`);
-  }
-  return trimmed;
-}
-
-function taskArtifactDir(taskID: string): string {
-  return join(homedir(), ".eval", taskID);
-}
-
-function collectStatePath(serial: string): string {
-  const safeSerial = serial.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join(COLLECT_STATE_DIR, `${safeSerial}.json`);
-}
-
-function readCollectState(serial: string): CollectState | null {
-  const file = collectStatePath(serial);
-  if (!existsSync(file)) {
-    return null;
-  }
-  try {
-    const raw = readFileSync(file, "utf8");
-    const data = JSON.parse(raw) as CollectState;
-    if (!data || typeof data !== "object") {
-      return null;
-    }
-    if (!Number.isInteger(data.pid) || data.pid <= 0) {
-      return null;
-    }
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-function writeCollectState(state: CollectState): void {
-  mkdirSync(COLLECT_STATE_DIR, { recursive: true });
-  writeFileSync(collectStatePath(state.serial), `${JSON.stringify(state, null, 2)}\n`, "utf8");
-}
-
-function clearCollectState(serial: string): void {
-  const file = collectStatePath(serial);
-  if (existsSync(file)) {
-    unlinkSync(file);
-  }
-}
-
-function isPidRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // noop
-    }
-  }
-}
-
-function listEvalpkgsRunProcesses(): Array<{ pid: number; command: string }> {
-  const out = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
-  const lines = out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const rows: Array<{ pid: number; command: string }> = [];
-  for (const line of lines) {
-    const m = line.match(/^(\d+)\s+(.+)$/);
-    if (!m) {
-      continue;
-    }
-    const pid = Number(m[1]);
-    const command = m[2];
-    if (!Number.isInteger(pid) || pid <= 0) {
-      continue;
-    }
-    if (!/\bevalpkgs\b/.test(command) || !/\brun\b/.test(command)) {
-      continue;
-    }
-    rows.push({ pid, command });
-  }
-  return rows;
-}
-
-function findCollectorPidsBySerial(serial: string): number[] {
-  const escaped = serial.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const patterns = [
-    new RegExp(`(?:^|\\s)--did(?:=|\\s+)${escaped}(?:\\s|$)`),
-    new RegExp(`(?:^|\\s)-d(?:\\s+)${escaped}(?:\\s|$)`),
-  ];
-  const pids = new Set<number>();
-  for (const proc of listEvalpkgsRunProcesses()) {
-    if (patterns.some((re) => re.test(proc.command))) {
-      pids.add(proc.pid);
-    }
-  }
-  return [...pids];
-}
-
-async function stopCollectorProcess(pid: number): Promise<void> {
-  if (!isPidRunning(pid)) {
-    return;
-  }
-  killProcessGroup(pid, "SIGINT");
-  for (let i = 0; i < 240; i += 1) {
-    await sleep(250);
-    if (!isPidRunning(pid)) {
-      return;
-    }
-  }
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    return;
-  }
-  for (let i = 0; i < 20; i += 1) {
-    await sleep(250);
-    if (!isPidRunning(pid)) {
-      return;
-    }
-  }
-  killProcessGroup(pid, "SIGKILL");
-  await sleep(100);
-}
-
-async function stopCollectorsForSerial(serial: string, statePID?: number): Promise<void> {
-  const pids = new Set<number>();
-  if (statePID && statePID > 0) {
-    pids.add(statePID);
-  }
-  for (const pid of findCollectorPidsBySerial(serial)) {
-    pids.add(pid);
-  }
-  for (const pid of pids) {
-    process.stderr.write(`[collect-start] stopping existing collector for SerialNumber=${serial}, pid=${pid}\n`);
-    await stopCollectorProcess(pid);
-  }
-  clearCollectState(serial);
-}
-
-async function waitForCountStable(
-  dbPath: string,
-  table: string,
-  maxWaitMs = 8000,
-  stableMs = 1500,
-): Promise<number> {
-  const intervalMs = 250;
-  const maxTicks = Math.max(1, Math.ceil(maxWaitMs / intervalMs));
-  const needStableTicks = Math.max(1, Math.ceil(stableMs / intervalMs));
-  let last = countRows(dbPath, table);
-  let stableTicks = 0;
-  for (let i = 0; i < maxTicks; i += 1) {
-    await sleep(intervalMs);
-    const cur = countRows(dbPath, table);
-    if (cur === last) {
-      stableTicks += 1;
-      if (stableTicks >= needStableTicks) {
-        return cur;
-      }
-      continue;
-    }
-    last = cur;
-    stableTicks = 0;
-  }
-  return last;
-}
-
-function countJSONLLinesSince(dir: string, sinceMs: number, suffix?: string): number {
-  if (!existsSync(dir)) {
-    return 0;
-  }
-  let total = 0;
-  const stack = [dir];
-  while (stack.length > 0) {
-    const current = stack.pop() as string;
-    const entries = readdirSync(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
-        continue;
-      }
-      if (suffix && !entry.name.endsWith(suffix)) {
-        continue;
-      }
-      const st = statSync(fullPath);
-      if (st.mtimeMs < sinceMs) {
-        continue;
-      }
-      const text = readFileSync(fullPath, "utf8");
-      const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "").length;
-      total += lines;
-    }
-  }
-  return total;
 }
 
 function truncateError(err: unknown): string {
@@ -647,6 +384,7 @@ function rowToSupabaseRecord(row: CaptureRow): SupabaseCaptureRecord {
     user_auth_entity: normalizeText(row.UserAuthEntity),
     tags: normalizeText(row.Tags),
     task_id: row.TaskID,
+    book_id: normalizeText(row.BookID),
     extra: normalizeText(row.Extra),
     like_count: row.LikeCount,
     view_count: row.ViewCount,
@@ -726,122 +464,6 @@ function buildFilterOptions(cmd: {
 }
 
 program
-  .command("collect-start")
-  .description("Start evalpkgs real-time collection in background")
-  .requiredOption("--task-id <value>", "Task identifier used by evalpkgs artifact output (digits only)")
-  .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
-  .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
-  .action(async (cmd: CollectOptions) => {
-    const taskID = validateTaskID(String(cmd.taskId || ""));
-    const dbPath = resolveDBPath(cmd.dbPath);
-    const table = resolveTable(cmd.table);
-
-    const bundleID = process.env.BUNDLE_ID?.trim();
-    const serial = process.env.SerialNumber?.trim();
-    if (!bundleID) {
-      throw new Error("BUNDLE_ID is required in environment");
-    }
-    if (!serial) {
-      throw new Error("SerialNumber is required in environment");
-    }
-
-    const artifactDir = taskArtifactDir(taskID);
-    mkdirSync(artifactDir, { recursive: true });
-    const countBefore = countRows(dbPath, table);
-    const maxIDBefore = maxRowID(dbPath, table);
-
-    const existing = readCollectState(serial);
-    await stopCollectorsForSerial(serial, existing?.pid);
-
-    process.stderr.write(
-      `[collect-start] start evalpkgs in background with TaskID=${taskID} BUNDLE_ID=${bundleID} SerialNumber=${serial}\n`,
-    );
-    process.stderr.write(`[collect-start] sqlite db=${dbPath} table=${table} before_count=${countBefore}\n`);
-
-    const child = spawn("evalpkgs", ["run", "--log-level", "debug", "--bundleID", bundleID, "--did", serial], {
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...process.env,
-        TaskID: taskID,
-        BUNDLE_ID: bundleID,
-        SerialNumber: serial,
-        TRACKING_STORAGE_DB_PATH: dbPath,
-        RESULT_SQLITE_TABLE: table,
-      },
-    });
-    child.unref();
-    const childPid = child.pid;
-    if (!childPid || !Number.isInteger(childPid) || childPid <= 0) {
-      throw new Error("failed to obtain evalpkgs pid");
-    }
-
-    await sleep(150);
-    if (!isPidRunning(childPid)) {
-      throw new Error("evalpkgs failed to stay running in background");
-    }
-
-    writeCollectState({
-      serial,
-      bundleID,
-      taskID,
-      pid: childPid,
-      dbPath,
-      table,
-      countBefore,
-      maxIDBefore,
-      startedAt: Date.now(),
-      artifactDir,
-    });
-
-    process.stderr.write(
-      `[collect-start] started pid=${childPid}; stop with: SerialNumber=${serial} npx tsx scripts/result_reporter.ts collect-stop\n`,
-    );
-  });
-
-program
-  .command("collect-stop")
-  .description("Stop background evalpkgs collector for one device and print collection delta")
-  .option("--serial <value>", "Device serial (default from SerialNumber env)")
-  .action(async (cmd: CollectStopOptions) => {
-    const serial = cmd.serial?.trim() || process.env.SerialNumber?.trim();
-    if (!serial) {
-      throw new Error("--serial is required (or set SerialNumber env)");
-    }
-    const state = readCollectState(serial);
-    if (!state) {
-      process.stderr.write(`[collect-stop] no active collector state for SerialNumber=${serial}\n`);
-      return;
-    }
-
-    let stopped = false;
-    if (isPidRunning(state.pid)) {
-      await stopCollectorProcess(state.pid);
-      stopped = true;
-    }
-    const countAfter = await waitForCountStable(state.dbPath, state.table);
-    const delta = countAfter - state.countBefore;
-    const taskDelta = countRowsByTaskAfterID(state.dbPath, state.table, state.taskID, state.maxIDBefore);
-    const trackingEvents = countJSONLLinesSince(state.artifactDir, state.startedAt, "_track.jsonl");
-    const recordsJSONL = countJSONLLinesSince(state.artifactDir, state.startedAt, "_records.jsonl");
-    const runtimeSec = Math.max(0, Math.round((Date.now() - state.startedAt) / 1000));
-    process.stderr.write(
-      `[collect-stop] sqlite db=${state.dbPath} table=${state.table} before_count=${state.countBefore} after_count=${countAfter} delta=${delta} task_delta=${taskDelta} records_jsonl=${recordsJSONL} tracking_events=${trackingEvents} runtime_sec=${runtimeSec}\n`,
-    );
-
-    if (trackingEvents === 0 && recordsJSONL === 0) {
-      process.stderr.write(
-        `[collect-stop] warning: no new *_track.jsonl or *_records.jsonl lines under ${state.artifactDir} since start time\n`,
-      );
-    }
-
-    clearCollectState(serial);
-    process.stderr.write(
-      `[collect-stop] completed serial=${serial} task_id=${state.taskID} pid=${state.pid} stopped=${stopped}\n`,
-    );
-  });
-
-program
   .command("stat")
   .description("Print total row count for one TaskID in capture_results")
   .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
@@ -854,7 +476,7 @@ program
     const qTable = quoteIdent(table);
     const rows = runSQLiteJSON<Array<{ count: number | string }>>(
       dbPath,
-      `SELECT COUNT(*) AS count FROM ${qTable} WHERE TaskID = ${sqlLiteral(String(taskID))};`,
+      `SELECT COUNT(*) AS count FROM ${qTable} WHERE TaskID = ${taskID};`,
     );
     process.stdout.write(`${parseCount(rows[0]?.count)}\n`);
   });

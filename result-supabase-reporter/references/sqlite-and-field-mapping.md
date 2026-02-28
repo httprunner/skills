@@ -1,17 +1,17 @@
 # SQLite Schema and Column Mapping
 
-## SQLite Defaults
+## Defaults
 
 - DB path default: `$HOME/.eval/records.sqlite`
 - Table default: `capture_results`
-- `collect-start` mode writes to the same shared sqlite path unless `--db-path` overrides it.
-- Override via env:
+- Override via environment:
   - `TRACKING_STORAGE_DB_PATH`
   - `RESULT_SQLITE_TABLE`
 
 ## Expected SQLite Columns
 
-Business columns: `Datetime`, `DeviceSerial`, `App`, `Scene`, `Params`, `ItemID`, `ItemCaption`, `ItemCDNURL`, `ItemURL`, `ItemDuration`, `UserName`, `UserID`, `UserAlias`, `UserAuthEntity`, `Tags`, `TaskID`, `Extra`, `LikeCount`, `ViewCount`, `AnchorPoint`, `CommentCount`, `CollectCount`, `ForwardCount`, `ShareCount`, `PayMode`, `Collection`, `Episode`, `PublishTime`.
+Business columns:
+`Datetime`, `DeviceSerial`, `App`, `Scene`, `Params`, `ItemID`, `ItemCaption`, `ItemCDNURL`, `ItemURL`, `ItemDuration`, `UserName`, `UserID`, `UserAlias`, `UserAuthEntity`, `Tags`, `TaskID`, `BookID`, `Extra`, `LikeCount`, `ViewCount`, `AnchorPoint`, `CommentCount`, `CollectCount`, `ForwardCount`, `ShareCount`, `PayMode`, `Collection`, `Episode`, `PublishTime`.
 
 Reporter bookkeeping columns: `reported`, `reported_at`, `report_error`.
 
@@ -35,6 +35,7 @@ Reporter bookkeeping columns: `reported`, `reported_at`, `report_error`.
 | UserAuthEntity | user_auth_entity | text |
 | Tags | tags | text |
 | TaskID | task_id | bigint |
+| BookID | book_id | text |
 | Extra | extra | text |
 | LikeCount | like_count | integer |
 | ViewCount | view_count | integer |
@@ -48,11 +49,14 @@ Reporter bookkeeping columns: `reported`, `reported_at`, `report_error`.
 | Episode | episode | text |
 | PublishTime | publish_time | text |
 
-## Report Status Semantics
+## Stable Upsert Key
 
-Note: uploader uses a stable `item_id` key for dedup.
-- Prefer sqlite `ItemID` when present.
+Use a stable `item_id` value to support `onConflict: "task_id,item_id"`:
+- Prefer `ItemID` when present.
 - Fallback to `ItemURL` when `ItemID` is empty/null.
+- Mark row as failed when both are empty.
+
+## Status Semantics
 
 - `reported = 0`: pending (never reported or manually reset)
 - `reported = -1`: previous report failed
@@ -62,57 +66,33 @@ Writeback columns:
 - `reported_at`: unix milliseconds of latest attempt
 - `report_error`: truncated error string (<= 512 chars), or `NULL` on success
 
-## Filtering Rules
+## Selection Rules
 
-Default query picks rows where:
-- `reported IN (0, -1)`
-- Ordered by `id ASC`
-- `filter`: limited by `--limit` (default 30)
-- `report`: pages through all matching rows using cursor-based pagination
-- `report --max-rows <n>`: optional total cap for current run
+Default selection:
+- `reported IN (0,-1)`
+- Order by `id ASC`
+- `filter`: cap with `--limit` (default 30)
+- `report`: paginate by `id` and optional `--max-rows`
 
-Optional filters narrow selection by app/scene/params/item/date/custom SQL predicate.
-For task-scoped workflows, pass `--task-id <TASK_ID>` to select only current-task rows.
-`TASK_ID` must be digits only.
+Optional filters: `--task-id`, `--app`, `--scene`, `--params-like`, `--item-id`, `--date-from`, `--date-to`, `--where`, `--where-arg`.
 
-## Quick Stat (`stat`)
+Use `--task-id <TASK_ID>` for task-scoped workflows (`TASK_ID` must be digits).
 
-Print total row count in `capture_results` for one TaskID:
+## Commands
+
+Print count for one task:
 
 ```bash
 npx tsx scripts/result_reporter.ts stat --task-id 20260206001
 ```
 
-## Collect Mode
-
-- `collect-start` records `before_count` and starts eval collection in background
-- `collect-start` enforces one active collector per `SerialNumber`
-- `collect-stop` terminates collector by `SerialNumber` and prints delta metrics:
-  - `delta`, `task_delta`, `records_jsonl`, `tracking_events`, `runtime_sec`
-
-## Command Examples
-
-Start collection:
-
-```bash
-export BUNDLE_ID=com.tencent.mm
-export SerialNumber=1fa20bb
-npx tsx scripts/result_reporter.ts collect-start --task-id 20260206001
-```
-
-Stop collection:
-
-```bash
-SerialNumber=1fa20bb npx tsx scripts/result_reporter.ts collect-stop
-```
-
-Filter pending/failed rows:
+Preview pending/failed rows:
 
 ```bash
 npx tsx scripts/result_reporter.ts filter --task-id 20260206001 --status 0,-1 --limit 10
 ```
 
-Report to Supabase:
+Run report:
 
 ```bash
 export SUPABASE_URL=https://xxx.supabase.co
@@ -120,7 +100,7 @@ export SUPABASE_SERVICE_ROLE_KEY=eyJ...
 npx tsx scripts/result_reporter.ts report --task-id 20260206001 --batch-size 100
 ```
 
-Retry failed rows:
+Reset failures then rerun report:
 
 ```bash
 npx tsx scripts/result_reporter.ts retry-reset
