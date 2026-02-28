@@ -7,7 +7,9 @@
     "stat": "tsx scripts/result_reporter.ts stat",
     "report": "tsx scripts/result_reporter.ts report",
     "filter": "tsx scripts/result_reporter.ts filter",
-    "retry-reset": "tsx scripts/result_reporter.ts retry-reset"
+    "retry-reset": "tsx scripts/result_reporter.ts retry-reset",
+    "hotlist-insert": "tsx scripts/hotlist_reporter.ts insert",
+    "hotlist-query": "tsx scripts/hotlist_reporter.ts query"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
