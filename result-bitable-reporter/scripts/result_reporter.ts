@@ -1,7 +1,6 @@
 #!/usr/bin/env -S npx tsx
 
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
@@ -25,6 +24,7 @@ type CaptureRow = {
   UserAuthEntity: string | null;
   Tags: string | null;
   TaskID: number | null;
+  BookID: string | null;
   Extra: string | null;
   LikeCount: number | null;
   ViewCount: number | null;
@@ -75,28 +75,7 @@ type RetryResetOptions = {
   scene?: string;
 };
 
-type CollectOptions = {
-  dbPath?: string;
-  table?: string;
-  taskId?: string;
-};
-
-type CollectStopOptions = {
-  serial?: string;
-};
-
-type CollectState = {
-  serial: string;
-  bundleID: string;
-  taskID: string;
-  pid: number;
-  dbPath: string;
-  table: string;
-  countBefore: number;
-  maxIDBefore: number;
-  startedAt: number;
-  artifactDir: string;
-};
+type IntString = number | string | null | undefined;
 
 type ResultFieldNames = {
   datetime: string;
@@ -115,6 +94,7 @@ type ResultFieldNames = {
   userAuthEntity: string;
   tags: string;
   taskID: string;
+  bookID: string;
   extra: string;
   likeCount: string;
   viewCount: string;
@@ -143,8 +123,7 @@ type FeishuResp<T> = {
 
 const DEFAULT_DB_PATH = join(homedir(), ".eval", "records.sqlite");
 const DEFAULT_TABLE = "capture_results";
-const COLLECT_STATE_DIR = join(homedir(), ".eval", "collectors");
-const REPORT_PAGE_SIZE = 100;
+const REPORT_PAGE_SIZE = 200;
 
 const program = new Command();
 program
@@ -169,6 +148,14 @@ function parseStatusCSV(raw: string): number[] {
   return values;
 }
 
+function parsePositiveInt(value: string, flagName: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid ${flagName}: ${value}; expected positive integer`);
+  }
+  return parsed;
+}
+
 function parseTaskIDNumber(raw: string): number {
   const value = raw.trim();
   if (!/^\d+$/.test(value)) {
@@ -179,6 +166,11 @@ function parseTaskIDNumber(raw: string): number {
     throw new Error(`invalid --task-id value: ${raw}; out of safe integer range`);
   }
   return taskID;
+}
+
+function parseCount(value: IntString): number {
+  const parsed = typeof value === "number" ? value : Number(value ?? 0);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
 }
 
 function expandHome(path: string): string {
@@ -329,7 +321,7 @@ function fetchRowsPage(opts: FilterOptions, limit: number, afterID: number): Cap
   const sql = `
 SELECT id, Datetime, DeviceSerial, App, Scene, Params, ItemID, ItemCaption,
        ItemCDNURL, ItemURL, ItemDuration, UserName, UserID, UserAlias,
-       UserAuthEntity, Tags, TaskID, Extra, LikeCount, ViewCount, AnchorPoint,
+       UserAuthEntity, Tags, TaskID, BookID, Extra, LikeCount, ViewCount, AnchorPoint,
        CommentCount, CollectCount, ForwardCount, ShareCount, PayMode, Collection,
        Episode, PublishTime
 FROM ${table}
@@ -337,280 +329,6 @@ ${whereSQL}
 ORDER BY id ASC
 LIMIT ${limit};`;
   return runSQLiteJSON<CaptureRow[]>(opts.dbPath, sql);
-}
-
-function countRows(dbPath: string, table: string): number {
-  const qTable = quoteIdent(table);
-  const rows = runSQLiteJSON<Array<{ count: number | string }>>(dbPath, `SELECT COUNT(*) AS count FROM ${qTable};`);
-  const value = rows[0]?.count ?? 0;
-  const count = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(count) ? count : 0;
-}
-
-function maxRowID(dbPath: string, table: string): number {
-  const qTable = quoteIdent(table);
-  const rows = runSQLiteJSON<Array<{ max_id: number | string | null }>>(
-    dbPath,
-    `SELECT COALESCE(MAX(id), 0) AS max_id FROM ${qTable};`,
-  );
-  const value = rows[0]?.max_id ?? 0;
-  const maxID = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(maxID) ? maxID : 0;
-}
-
-function countRowsByTaskAfterID(dbPath: string, table: string, taskID: string, afterID: number): number {
-  const qTable = quoteIdent(table);
-  const sql = `SELECT COUNT(*) AS count FROM ${qTable} WHERE id > ${afterID} AND TaskID = ${sqlLiteral(taskID)};`;
-  const rows = runSQLiteJSON<Array<{ count: number | string }>>(dbPath, sql);
-  const value = rows[0]?.count ?? 0;
-  const count = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(count) ? count : 0;
-}
-
-function validateTaskID(taskID: string): string {
-  const trimmed = taskID.trim();
-  if (trimmed === "") {
-    throw new Error("--task-id is required");
-  }
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`invalid --task-id: ${taskID}; expected digits only`);
-  }
-  return trimmed;
-}
-
-function taskArtifactDir(taskID: string): string {
-  return join(homedir(), ".eval", taskID);
-}
-
-function collectStatePath(serial: string): string {
-  const safeSerial = serial.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join(COLLECT_STATE_DIR, `${safeSerial}.json`);
-}
-
-function readCollectState(serial: string): CollectState | null {
-  const file = collectStatePath(serial);
-  if (!existsSync(file)) {
-    return null;
-  }
-  try {
-    const raw = readFileSync(file, "utf8");
-    const data = JSON.parse(raw) as CollectState;
-    if (!data || typeof data !== "object") {
-      return null;
-    }
-    if (!Number.isInteger(data.pid) || data.pid <= 0) {
-      return null;
-    }
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-function writeCollectState(state: CollectState): void {
-  mkdirSync(COLLECT_STATE_DIR, { recursive: true });
-  writeFileSync(collectStatePath(state.serial), `${JSON.stringify(state, null, 2)}\n`, "utf8");
-}
-
-function clearCollectState(serial: string): void {
-  const file = collectStatePath(serial);
-  if (existsSync(file)) {
-    unlinkSync(file);
-  }
-}
-
-function isPidRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // noop: process may already exit between checks
-    }
-  }
-}
-
-function listEvalpkgsRunProcesses(): Array<{ pid: number; command: string }> {
-  const out = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
-  const lines = out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const rows: Array<{ pid: number; command: string }> = [];
-  for (const line of lines) {
-    const m = line.match(/^(\d+)\s+(.+)$/);
-    if (!m) {
-      continue;
-    }
-    const pid = Number(m[1]);
-    const command = m[2];
-    if (!Number.isInteger(pid) || pid <= 0) {
-      continue;
-    }
-    if (!/\bevalpkgs\b/.test(command) || !/\brun\b/.test(command)) {
-      continue;
-    }
-    rows.push({ pid, command });
-  }
-  return rows;
-}
-
-function findCollectorPidsBySerial(serial: string): number[] {
-  const escaped = serial.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const patterns = [
-    new RegExp(`(?:^|\\s)--did(?:=|\\s+)${escaped}(?:\\s|$)`),
-    new RegExp(`(?:^|\\s)-d(?:\\s+)${escaped}(?:\\s|$)`),
-  ];
-  const pids = new Set<number>();
-  for (const proc of listEvalpkgsRunProcesses()) {
-    if (patterns.some((re) => re.test(proc.command))) {
-      pids.add(proc.pid);
-    }
-  }
-  return [...pids];
-}
-
-async function stopCollectorProcess(pid: number): Promise<void> {
-  if (!isPidRunning(pid)) {
-    return;
-  }
-  // Match manual Ctrl+C behavior first so evalpkgs can flush buffered writes.
-  killProcessGroup(pid, "SIGINT");
-  for (let i = 0; i < 240; i += 1) {
-    await sleep(250);
-    if (!isPidRunning(pid)) {
-      return;
-    }
-  }
-  // Then escalate only for the main process.
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    return;
-  }
-  for (let i = 0; i < 20; i += 1) {
-    await sleep(250);
-    if (!isPidRunning(pid)) {
-      return;
-    }
-  }
-  killProcessGroup(pid, "SIGKILL");
-  await sleep(100);
-}
-
-async function stopCollectorsForSerial(serial: string, statePID?: number): Promise<void> {
-  const pids = new Set<number>();
-  if (statePID && statePID > 0) {
-    pids.add(statePID);
-  }
-  for (const pid of findCollectorPidsBySerial(serial)) {
-    pids.add(pid);
-  }
-  for (const pid of pids) {
-    process.stderr.write(`[collect-start] stopping existing collector for SerialNumber=${serial}, pid=${pid}\n`);
-    await stopCollectorProcess(pid);
-  }
-  clearCollectState(serial);
-}
-
-async function waitForCountStable(
-  dbPath: string,
-  table: string,
-  maxWaitMs = 8000,
-  stableMs = 1500,
-): Promise<number> {
-  const intervalMs = 250;
-  const maxTicks = Math.max(1, Math.ceil(maxWaitMs / intervalMs));
-  const needStableTicks = Math.max(1, Math.ceil(stableMs / intervalMs));
-  let last = countRows(dbPath, table);
-  let stableTicks = 0;
-  for (let i = 0; i < maxTicks; i += 1) {
-    await sleep(intervalMs);
-    const cur = countRows(dbPath, table);
-    if (cur === last) {
-      stableTicks += 1;
-      if (stableTicks >= needStableTicks) {
-        return cur;
-      }
-      continue;
-    }
-    last = cur;
-    stableTicks = 0;
-  }
-  return last;
-}
-
-function hasArtifactDeltaSince(dir: string, sinceMs: number): boolean {
-  if (!existsSync(dir)) {
-    return false;
-  }
-  const stack = [dir];
-  while (stack.length > 0) {
-    const current = stack.pop() as string;
-    const entries = readdirSync(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      const st = statSync(fullPath);
-      if (st.mtimeMs >= sinceMs) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function countJSONLLinesSince(dir: string, sinceMs: number, suffix?: string): number {
-  if (!existsSync(dir)) {
-    return 0;
-  }
-  let total = 0;
-  const stack = [dir];
-  while (stack.length > 0) {
-    const current = stack.pop() as string;
-    const entries = readdirSync(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
-        continue;
-      }
-      if (suffix && !entry.name.endsWith(suffix)) {
-        continue;
-      }
-      const st = statSync(fullPath);
-      if (st.mtimeMs < sinceMs) {
-        continue;
-      }
-      const text = readFileSync(fullPath, "utf8");
-      const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "").length;
-      total += lines;
-    }
-  }
-  return total;
 }
 
 function truncateError(err: unknown): string {
@@ -661,16 +379,13 @@ function parseBitableURL(rawURL: string): BitableRef {
 function preprocessBitableURL(rawURL: string): string {
   let value = rawURL.trim();
   if (
-    (value.startsWith("\"") && value.endsWith("\"")) ||
+    (value.startsWith('"') && value.endsWith('"')) ||
     (value.startsWith("'") && value.endsWith("'"))
   ) {
     value = value.slice(1, -1).trim();
   }
-  // Accept shell-escaped query separators like \?table\=... \&view=...
   value = value.replace(/\\([?&=])/g, "$1");
-  // Accept HTML-escaped separators from copy/paste sources.
   value = value.replace(/&amp;/gi, "&");
-  // Remove accidental spaces around query separators.
   value = value.replace(/\s*([?&=])\s*/g, "$1");
   return value;
 }
@@ -741,7 +456,6 @@ function normalizeExtra(raw: string | null): string | undefined {
   if (trimmed === "") {
     return undefined;
   }
-  // Keep Extra as JSON string to match the result-table text field semantics.
   return trimmed;
 }
 
@@ -765,6 +479,7 @@ function resultFieldNames(): ResultFieldNames {
     userAuthEntity: pick("RESULT_FIELD_USERAUTHENTITY", "UserAuthEntity"),
     tags: pick("RESULT_FIELD_TAGS", "Tags"),
     taskID: pick("RESULT_FIELD_TASKID", "TaskID"),
+    bookID: pick("RESULT_FIELD_BOOKID", "BookID"),
     extra: pick("RESULT_FIELD_EXTRA", "Extra"),
     likeCount: pick("RESULT_FIELD_LIKECOUNT", "LikeCount"),
     viewCount: pick("RESULT_FIELD_VIEWCOUNT", "ViewCount"),
@@ -809,6 +524,7 @@ function rowToFeishuFields(row: CaptureRow): Record<string, unknown> {
   assignIfPresent(fields, names.userAuthEntity, row.UserAuthEntity);
   assignIfPresent(fields, names.tags, row.Tags);
   assignIfPresent(fields, names.taskID, row.TaskID);
+  assignIfPresent(fields, names.bookID, row.BookID);
   assignIfPresent(fields, names.extra, normalizeExtra(row.Extra));
   assignIfPresent(fields, names.likeCount, row.LikeCount);
   assignIfPresent(fields, names.viewCount, row.ViewCount);
@@ -824,11 +540,7 @@ function rowToFeishuFields(row: CaptureRow): Record<string, unknown> {
   return fields;
 }
 
-async function createBitableRecordsBatch(
-  accessToken: string,
-  ref: BitableRef,
-  rows: CaptureRow[],
-): Promise<void> {
+async function createBitableRecordsBatch(accessToken: string, ref: BitableRef, rows: CaptureRow[]): Promise<void> {
   const url = `${baseURL()}/open-apis/bitable/v1/apps/${encodeURIComponent(ref.appToken)}/tables/${encodeURIComponent(
     ref.tableID,
   )}/records/batch_create`;
@@ -848,11 +560,7 @@ async function createBitableRecordsBatch(
   }
 }
 
-async function createBitableRecordSingle(
-  accessToken: string,
-  ref: BitableRef,
-  row: CaptureRow,
-): Promise<void> {
+async function createBitableRecordSingle(accessToken: string, ref: BitableRef, row: CaptureRow): Promise<void> {
   const url = `${baseURL()}/open-apis/bitable/v1/apps/${encodeURIComponent(ref.appToken)}/tables/${encodeURIComponent(
     ref.tableID,
   )}/records`;
@@ -895,10 +603,7 @@ function buildFilterOptions(cmd: {
   where?: string;
   whereArg?: string[];
 }): FilterOptions {
-  const limit = Number(cmd.limit ?? "30");
-  if (!Number.isInteger(limit) || limit <= 0) {
-    throw new Error(`invalid --limit: ${cmd.limit}`);
-  }
+  const limit = parsePositiveInt(cmd.limit ?? "30", "--limit");
   const status = parseStatusCSV(cmd.status ?? "0,-1");
   const taskID = cmd.taskId?.trim() ? parseTaskIDNumber(cmd.taskId) : undefined;
   return {
@@ -919,122 +624,6 @@ function buildFilterOptions(cmd: {
 }
 
 program
-  .command("collect-start")
-  .description("Start evalpkgs real-time collection in background")
-  .requiredOption("--task-id <value>", "Task identifier used by evalpkgs artifact output (digits only)")
-  .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
-  .option("--table <name>", "Result table name (default from RESULT_SQLITE_TABLE or capture_results)")
-  .action(async (cmd: CollectOptions) => {
-    const taskID = validateTaskID(String(cmd.taskId || ""));
-    const dbPath = resolveDBPath(cmd.dbPath);
-    const table = resolveTable(cmd.table);
-
-    const bundleID = process.env.BUNDLE_ID?.trim();
-    const serial = process.env.SerialNumber?.trim();
-    if (!bundleID) {
-      throw new Error("BUNDLE_ID is required in environment");
-    }
-    if (!serial) {
-      throw new Error("SerialNumber is required in environment");
-    }
-
-    const artifactDir = taskArtifactDir(taskID);
-    mkdirSync(artifactDir, { recursive: true });
-    const countBefore = countRows(dbPath, table);
-    const maxIDBefore = maxRowID(dbPath, table);
-
-    const existing = readCollectState(serial);
-    await stopCollectorsForSerial(serial, existing?.pid);
-
-    process.stderr.write(
-      `[collect-start] start evalpkgs in background with TaskID=${taskID} BUNDLE_ID=${bundleID} SerialNumber=${serial}\n`,
-    );
-    process.stderr.write(`[collect-start] sqlite db=${dbPath} table=${table} before_count=${countBefore}\n`);
-
-    const child = spawn("evalpkgs", ["run", "--log-level", "debug", "--bundleID", bundleID, "--did", serial], {
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...process.env,
-        TaskID: taskID,
-        BUNDLE_ID: bundleID,
-        SerialNumber: serial,
-        TRACKING_STORAGE_DB_PATH: dbPath,
-        RESULT_SQLITE_TABLE: table,
-      },
-    });
-    child.unref();
-    const childPid = child.pid;
-    if (!childPid || !Number.isInteger(childPid) || childPid <= 0) {
-      throw new Error("failed to obtain evalpkgs pid");
-    }
-
-    await sleep(150);
-    if (!isPidRunning(childPid)) {
-      throw new Error("evalpkgs failed to stay running in background");
-    }
-
-    writeCollectState({
-      serial,
-      bundleID,
-      taskID,
-      pid: childPid,
-      dbPath,
-      table,
-      countBefore,
-      maxIDBefore,
-      startedAt: Date.now(),
-      artifactDir,
-    });
-
-    process.stderr.write(
-      `[collect-start] started pid=${childPid}; stop with: SerialNumber=${serial} npx tsx scripts/result_reporter.ts collect-stop\n`,
-    );
-  });
-
-program
-  .command("collect-stop")
-  .description("Stop background evalpkgs collector for one device and print collection delta")
-  .option("--serial <value>", "Device serial (default from SerialNumber env)")
-  .action(async (cmd: CollectStopOptions) => {
-    const serial = cmd.serial?.trim() || process.env.SerialNumber?.trim();
-    if (!serial) {
-      throw new Error("--serial is required (or set SerialNumber env)");
-    }
-    const state = readCollectState(serial);
-    if (!state) {
-      process.stderr.write(`[collect-stop] no active collector state for SerialNumber=${serial}\n`);
-      return;
-    }
-
-    let stopped = false;
-    if (isPidRunning(state.pid)) {
-      await stopCollectorProcess(state.pid);
-      stopped = true;
-    }
-    const countAfter = await waitForCountStable(state.dbPath, state.table);
-    const delta = countAfter - state.countBefore;
-    const taskDelta = countRowsByTaskAfterID(state.dbPath, state.table, state.taskID, state.maxIDBefore);
-    const trackingEvents = countJSONLLinesSince(state.artifactDir, state.startedAt, "_track.jsonl");
-    const recordsJSONL = countJSONLLinesSince(state.artifactDir, state.startedAt, "_records.jsonl");
-    const runtimeSec = Math.max(0, Math.round((Date.now() - state.startedAt) / 1000));
-    process.stderr.write(
-      `[collect-stop] sqlite db=${state.dbPath} table=${state.table} before_count=${state.countBefore} after_count=${countAfter} delta=${delta} task_delta=${taskDelta} records_jsonl=${recordsJSONL} tracking_events=${trackingEvents} runtime_sec=${runtimeSec}\n`,
-    );
-
-    if (!hasArtifactDeltaSince(state.artifactDir, state.startedAt)) {
-      process.stderr.write(
-        `[collect-stop] warning: no new/updated files detected under ${state.artifactDir} since start time\n`,
-      );
-    }
-
-    clearCollectState(serial);
-    process.stderr.write(
-      `[collect-stop] completed serial=${serial} task_id=${state.taskID} pid=${state.pid} stopped=${stopped}\n`,
-    );
-  });
-
-program
   .command("stat")
   .description("Print total row count for one TaskID in capture_results")
   .option("--db-path <path>", "SQLite db path (default from TRACKING_STORAGE_DB_PATH or ~/.eval/records.sqlite)")
@@ -1047,11 +636,9 @@ program
     const qTable = quoteIdent(table);
     const rows = runSQLiteJSON<Array<{ count: number | string }>>(
       dbPath,
-      `SELECT COUNT(*) AS count FROM ${qTable} WHERE TaskID = ${sqlLiteral(String(taskID))};`,
+      `SELECT COUNT(*) AS count FROM ${qTable} WHERE TaskID = ${taskID};`,
     );
-    const value = rows[0]?.count ?? 0;
-    const count = typeof value === "number" ? value : Number(value);
-    process.stdout.write(`${Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0}\n`);
+    process.stdout.write(`${parseCount(rows[0]?.count)}\n`);
   });
 
 program
@@ -1076,9 +663,7 @@ program
     for (const row of rows) {
       process.stdout.write(`${JSON.stringify(row)}\n`);
     }
-    process.stderr.write(
-      `[filter] db=${opts.dbPath} table=${opts.table} selected=${rows.length} limit=${opts.limit}\n`,
-    );
+    process.stderr.write(`[filter] db=${opts.dbPath} table=${opts.table} selected=${rows.length} limit=${opts.limit}\n`);
   });
 
 program
@@ -1090,7 +675,7 @@ program
   .option("--status <csv>", "Reported status list, comma-separated", "0,-1")
   .option("--task-id <value>", "Filter by exact TaskID (digits)")
   .option("--max-rows <n>", "Maximum total rows to process in this report run")
-  .option("--batch-size <n>", "Batch create size (max 500)", "30")
+  .option("--batch-size <n>", "Batch create size (max 500)", "100")
   .option("--dry-run", "Print selected rows only, skip Feishu and writeback", false)
   .option("--app <value>", "Exact App filter")
   .option("--scene <value>", "Exact Scene filter")
@@ -1102,30 +687,23 @@ program
   .option("--where-arg <value>", "Bound value for --where (repeatable)", collect, [])
   .action(async (cmd) => {
     const filterOpts = buildFilterOptions(cmd);
-    const batchSize = Number(cmd.batchSize ?? "30");
-    if (!Number.isInteger(batchSize) || batchSize <= 0 || batchSize > 500) {
+    const batchSize = parsePositiveInt(cmd.batchSize ?? "100", "--batch-size");
+    if (batchSize > 500) {
       throw new Error(`invalid --batch-size: ${cmd.batchSize}; expected 1..500`);
     }
+
+    const maxRows = cmd.maxRows === undefined ? undefined : parsePositiveInt(cmd.maxRows, "--max-rows");
     const reportOpts: ReportOptions = {
       ...filterOpts,
       bitableURL: cmd.bitableUrl?.trim() || process.env.RESULT_BITABLE_URL?.trim(),
       batchSize,
       dryRun: Boolean(cmd.dryRun),
-      maxRows: cmd.maxRows === undefined ? undefined : Number(cmd.maxRows),
+      maxRows,
     };
-    if (reportOpts.maxRows !== undefined && (!Number.isInteger(reportOpts.maxRows) || reportOpts.maxRows <= 0)) {
-      throw new Error(`invalid --max-rows: ${cmd.maxRows}; expected positive integer`);
-    }
 
-    if (!reportOpts.bitableURL && !reportOpts.dryRun) {
+    if (!reportOpts.dryRun && !reportOpts.bitableURL) {
       throw new Error("RESULT_BITABLE_URL or --bitable-url is required");
     }
-
-    const pageSize = Math.max(reportOpts.batchSize, REPORT_PAGE_SIZE);
-    let lastID = 0;
-    let selectedCount = 0;
-    let successCount = 0;
-    let failedCount = 0;
 
     let accessToken = "";
     let bitableRef: BitableRef | null = null;
@@ -1133,6 +711,12 @@ program
       accessToken = await getTenantAccessToken();
       bitableRef = await resolveBitableRef(reportOpts.bitableURL as string, accessToken);
     }
+
+    const pageSize = Math.max(reportOpts.batchSize, REPORT_PAGE_SIZE);
+    let lastID = 0;
+    let selectedCount = 0;
+    let successCount = 0;
+    let failedCount = 0;
 
     while (true) {
       if (reportOpts.maxRows !== undefined && selectedCount >= reportOpts.maxRows) {
@@ -1156,21 +740,23 @@ program
         }
         continue;
       }
+      if (!bitableRef) {
+        throw new Error("internal error: bitable ref is missing");
+      }
 
       const chunks = splitIntoChunks(rows, reportOpts.batchSize);
       for (const chunk of chunks) {
         const ids = chunk.map((row) => row.id);
         try {
-          await createBitableRecordsBatch(accessToken, bitableRef as BitableRef, chunk);
+          await createBitableRecordsBatch(accessToken, bitableRef, chunk);
           markSuccessBatch(reportOpts.dbPath, reportOpts.table, ids);
           successCount += ids.length;
         } catch (err) {
           const msg = truncateError(err);
           process.stderr.write(`[report] batch failed size=${ids.length} error=${msg}; fallback to single rows\n`);
-          // Fallback to single-row uploads to reduce blast radius and surface bad rows.
           for (const row of chunk) {
             try {
-              await createBitableRecordSingle(accessToken, bitableRef as BitableRef, row);
+              await createBitableRecordSingle(accessToken, bitableRef, row);
               markSuccessBatch(reportOpts.dbPath, reportOpts.table, [row.id]);
               successCount += 1;
             } catch (singleErr) {

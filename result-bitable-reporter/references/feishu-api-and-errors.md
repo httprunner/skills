@@ -1,124 +1,77 @@
-# Feishu API and Error Handling
+# Feishu Bitable API and Error Handling
 
-## APIs Used
+## API Contract
 
-1. Tenant token
-- `POST /open-apis/auth/v3/tenant_access_token/internal/`
-- Request body:
-  - `app_id`
-  - `app_secret`
+Use Feishu OpenAPI with tenant token:
 
-2. Wiki token resolve (only for wiki URLs)
-- `GET /open-apis/wiki/v2/spaces/get_node?token=<wiki_token>`
-- Read `data.node.obj_token` as bitable app token.
+1. `POST /open-apis/auth/v3/tenant_access_token/internal/`
+2. `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create`
 
-3. Result row batch create
-- `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create`
-- Request body:
-  - `records`: list of `{ "fields": { ... } }`
+Optional for wiki URLs:
 
-## Input URL Requirements
+- `GET /open-apis/wiki/v2/spaces/get_node?token=<wiki_token>` to resolve `obj_token` as bitable app token.
 
-`RESULT_BITABLE_URL` (or `--bitable-url`) must include:
+## Required Inputs for `report`
 
-- app token URL: `/base/<app_token>?table=<table_id>`
-- or wiki URL: `/wiki/<wiki_token>?table=<table_id>`
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `RESULT_BITABLE_URL` (or `--bitable-url`)
 
-## Batch Size
+Optional:
 
-Feishu bitable batch_create supports up to 500 records per request.
+- `FEISHU_BASE_URL` (default `https://open.feishu.cn`)
 
-Skill default:
-- `--batch-size 30`
-- script auto-splits large selections into chunks.
+## Bitable URL Requirement
 
-## Failure Handling
+`RESULT_BITABLE_URL` must contain `table=<table_id>` and one of:
 
-- API call failure marks each row in the failed chunk as `reported=-1`.
-- `report_error` stores a truncated string for later inspection.
-- Common causes:
-  - Auth failure (`FEISHU_APP_ID`/`FEISHU_APP_SECRET` mismatch)
-  - Schema mismatch (`FieldNameNotFound`)
-  - Rate limit or gateway errors
+- `/base/<app_token>?table=<table_id>`
+- `/wiki/<wiki_token>?table=<table_id>`
 
-## Practical Triage
+The script accepts common escaped forms (`\?`, `\&`, `\=`, `&amp;`).
 
-1. Use `--dry-run` to validate selection first.
-2. In task workflow, include `--task-id <TASK_ID>` to avoid cross-task uploads.
-3. Confirm result table URL and field names.
-4. Inspect sqlite `report_error` values and repair mapping/env.
-5. Run `retry-reset`, then retry `report`.
+## Batch Behavior
 
-## Field Mapping Env Overrides
+- Default `--batch-size 100`
+- Allowed range in script: `1..500`
+- Paginate sqlite rows and upload in chunks
+- Fallback to single-row create when batch create fails
 
-Default Feishu field names come from sqlite capture columns and can be overridden:
+## Writeback Rules
 
-- `RESULT_FIELD_DATETIME` (default `Datetime`)
-- `RESULT_FIELD_DEVICE_SERIAL` (default `DeviceSerial`)
-- `RESULT_FIELD_APP` (default `App`)
-- `RESULT_FIELD_SCENE` (default `Scene`)
-- `RESULT_FIELD_PARAMS` (default `Params`)
-- `RESULT_FIELD_ITEMID` (default `ItemID`)
-- `RESULT_FIELD_ITEMCAPTION` (default `ItemCaption`)
-- `RESULT_FIELD_ITEMCDNURL` (default `ItemCDNURL`)
-- `RESULT_FIELD_ITEMURL` (default `ItemURL`)
-- `RESULT_FIELD_DURATION` (default `ItemDuration`)
-- `RESULT_FIELD_USERNAME` (default `UserName`)
-- `RESULT_FIELD_USERID` (default `UserID`)
-- `RESULT_FIELD_USERALIAS` (default `UserAlias`)
-- `RESULT_FIELD_USERAUTHENTITY` (default `UserAuthEntity`)
-- `RESULT_FIELD_TAGS` (default `Tags`)
-- `RESULT_FIELD_TASKID` (default `TaskID`)
-- `RESULT_FIELD_EXTRA` (default `Extra`)
-- `RESULT_FIELD_LIKECOUNT` (default `LikeCount`)
-- `RESULT_FIELD_VIEWCOUNT` (default `ViewCount`)
-- `RESULT_FIELD_ANCHORPOINT` (default `AnchorPoint`)
-- `RESULT_FIELD_COMMENTCOUNT` (default `CommentCount`)
-- `RESULT_FIELD_COLLECTCOUNT` (default `CollectCount`)
-- `RESULT_FIELD_FORWARDCOUNT` (default `ForwardCount`)
-- `RESULT_FIELD_SHARECOUNT` (default `ShareCount`)
-- `RESULT_FIELD_PAYMODE` (default `PayMode`)
-- `RESULT_FIELD_COLLECTION` (default `Collection`)
-- `RESULT_FIELD_EPISODE` (default `Episode`)
-- `RESULT_FIELD_PUBLISHTIME` (default `PublishTime`)
+On report failure, sqlite writeback marks each failed row:
 
-## Command Examples
+- `reported = -1`
+- `reported_at = now_ms`
+- `report_error = <truncated error>`
 
-Report pending/failed rows to Feishu:
+On success:
+
+- `reported = 1`
+- `reported_at = now_ms`
+- `report_error = NULL`
+
+## Common Error Causes
+
+- Invalid `FEISHU_APP_ID` or `FEISHU_APP_SECRET`
+- Invalid `RESULT_BITABLE_URL` / unresolved wiki token
+- Field name mismatch in bitable
+- Temporary API failures or rate limits
+
+## Practical Triage Steps
+
+1. Run `report --dry-run` to confirm selection and filters.
+2. Verify target bitable URL and field names.
+3. Inspect sqlite failures:
 
 ```bash
-export FEISHU_APP_ID=...
-export FEISHU_APP_SECRET=...
-export RESULT_BITABLE_URL="https://.../wiki/...?...table=tbl_xxx&view=vew_xxx"
-npx tsx scripts/result_reporter.ts report \
-  --db-path ~/.eval/records.sqlite \
-  --table capture_results \
-  --task-id 20260206001 \
-  --status 0,-1 \
-  --batch-size 30 \
-  --max-rows 500
+sqlite3 ~/.eval/records.sqlite "SELECT id, TaskID, ItemID, report_error, reported_at FROM capture_results WHERE reported = -1 ORDER BY reported_at DESC LIMIT 20;"
 ```
 
-Dry-run without Feishu write:
+4. Fix root cause.
+5. Retry:
 
 ```bash
-npx tsx scripts/result_reporter.ts report \
-  --dry-run \
-  --task-id 20260206001 \
-  --status 0,-1 \
-  --max-rows 20
-```
-
-Reset failed rows and retry:
-
-```bash
-npx tsx scripts/result_reporter.ts retry-reset \
-  --db-path ~/.eval/records.sqlite \
-  --table capture_results
-
-npx tsx scripts/result_reporter.ts report \
-  --task-id 20260206001 \
-  --status 0,-1 \
-  --batch-size 30 \
-  --max-rows 500
+npx tsx scripts/result_reporter.ts retry-reset
+npx tsx scripts/result_reporter.ts report --task-id <TASK_ID> --status 0,-1
 ```
